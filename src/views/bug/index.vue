@@ -239,9 +239,10 @@
 <script setup lang="ts">
 // @ts-nocheck
 import {
-  ref, computed, onMounted,
+  ref, computed, onMounted, nextTick,
 } from 'vue';
 import { useStore } from 'vuex';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Search, Filter, Plus, Delete, ArrowDown, WarningFilled,
@@ -258,6 +259,7 @@ import BugDetailDrawer from './components/BugDetailDrawer.vue';
 import BugResolveDialog from './components/BugResolveDialog.vue';
 
 const store = useStore();
+const route = useRoute();
 const currentUserId = computed(() => store.getters.userId);
 
 const severityOptions = ['致命', '严重', '一般', '轻微', '建议'];
@@ -496,7 +498,18 @@ async function handleBatchDelete() {
 }
 
 onMounted(async () => {
-  fetchList();
+  await fetchList();
+
+  // 如果 URL 带 openId 参数，自动打开对应 Bug 详情
+  const { openId } = route.query;
+  if (openId) {
+    await nextTick();
+    const target = bugList.value.find((b) => String(b.id) === String(openId));
+    if (target) {
+      handleDetail(target);
+    }
+  }
+
   const [uRes, pRes, vRes] = await Promise.all([
     getUserList(),
     getProjectList(),

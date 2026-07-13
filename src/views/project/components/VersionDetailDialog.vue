@@ -59,7 +59,7 @@
                 stroke-width="8"
                 stroke-linecap="round"
                 :stroke-dasharray="2 * Math.PI * 42"
-                :stroke-dashoffset="2 * Math.PI * 42 * (1 - (version?.progress || 0) / 100)"
+                :stroke-dashoffset="2 * Math.PI * 42 * (1 - overallProgress / 100)"
                 transform="rotate(-90 50 50)"
                 class="ring-fill"
               />
@@ -71,7 +71,7 @@
               </defs>
             </svg>
             <div class="ring-text">
-              <span class="ring-text__value">{{ version?.progress || 0 }}%</span>
+              <span class="ring-text__value">{{ overallProgress }}%</span>
               <span class="ring-text__label">整体进度</span>
             </div>
           </div>
@@ -81,7 +81,7 @@
             <div class="hero-bar">
               <div class="hero-bar__header">
                 <span class="hero-bar__label">开发进度</span>
-                <span class="hero-bar__stat">{{ taskDone }}/{{ taskTotal }} 任务</span>
+                <span class="hero-bar__stat">{{ devTaskDone }}/{{ devTaskCount }} 任务</span>
               </div>
               <div class="hero-bar__track">
                 <div
@@ -279,23 +279,42 @@
 
               <!-- Bug 列 -->
               <template v-if="activeTab === 'bug'">
-                <el-table-column label="Bug" min-width="260">
+                <el-table-column label="Bug 标题" min-width="200" show-overflow-tooltip>
                   <template #default="{ row }">
                     <div class="task-cell">
                       <span class="task-cell__dot" :class="bugDotClass(row.status)" />
-                      <div class="task-cell__info">
-                        <span class="task-cell__name">{{ row.title }}</span>
-                        <div class="task-cell__tags">
-                          <el-tag :type="bugSeverityType(row.severity)" size="small">{{ row.severity }}</el-tag>
-                          <span class="task-meta task-meta--divider">·</span>
-                          <el-tag :type="bugPriorityType(row.priority)" size="small">{{ row.priority }}</el-tag>
-                          <span class="task-meta task-meta--divider">·</span>
-                          <el-tag :type="bugStatusType(row.status)" size="small">{{ row.status }}</el-tag>
-                          <span v-if="row.assignee_name" class="task-meta task-meta--divider">·</span>
-                          <span v-if="row.assignee_name" class="task-meta">{{ row.assignee_name }}</span>
-                        </div>
-                      </div>
+                      <span class="task-cell__name bug-cell__title">{{ row.title }}</span>
                     </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="严重程度" width="85" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="bugSeverityType(row.severity)" size="small">{{ row.severity }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="优先级" width="65" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="bugPriorityType(row.priority)" size="small">{{ row.priority }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="80" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="bugStatusType(row.status)" size="small">{{ row.status }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="处理人" width="110">
+                  <template #default="{ row }">
+                    <span v-if="row.assignee_name" class="task-meta">
+                      <img v-if="row.assignee_avatar" :src="row.assignee_avatar" class="task-meta__avatar" />
+                      <span v-else class="task-meta__avatar task-meta__avatar--text">{{ row.assignee_name[0] }}</span>
+                      {{ row.assignee_name }}
+                    </span>
+                    <span v-else class="task-meta" style="color: var(--text-placeholder)">-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="70" fixed="right" align="center">
+                  <template #default="{ row }">
+                    <el-button size="small" link type="primary" @click="openBug(row)">查看</el-button>
                   </template>
                 </el-table-column>
               </template>
@@ -390,6 +409,7 @@ const taskTotal = computed(() => localTasks.value.length);
 const taskDone = computed(() => localTasks.value.filter((t) => t.status === '已完成').length);
 const bugCount = computed(() => localBugs.value.length);
 const devTaskCount = computed(() => localTasks.value.filter((t) => t.type === '开发').length);
+const devTaskDone = computed(() => localTasks.value.filter((t) => t.type === '开发' && t.status === '已完成').length);
 const testTaskCount = computed(() => localTasks.value.filter((t) => t.type === '测试').length);
 const acceptanceTaskCount = computed(() => localTasks.value.filter((t) => t.type === '产品').length);
 
@@ -535,14 +555,20 @@ const handleEditVersion = () => {
 };
 
 // ── 进度颜色 ──
+const overallProgress = computed(() => {
+  const tasks = localTasks.value;
+  if (tasks.length === 0) return 0;
+  const sum = tasks.reduce((acc, t) => acc + (t.progress || 0), 0);
+  return Math.round(sum / tasks.length);
+});
 const progressGradientStart = computed(() => {
-  const p = props.version?.progress || 0;
+  const p = overallProgress.value;
   if (p <= 0) return 'var(--text-placeholder)';
   if (p < 50) return 'var(--el-color-primary)';
   return 'var(--el-color-success)';
 });
 const progressGradientEnd = computed(() => {
-  const p = props.version?.progress || 0;
+  const p = overallProgress.value;
   if (p <= 0) return 'var(--text-placeholder)';
   if (p < 50) return 'var(--el-color-primary-light-5)';
   if (p < 80) return 'var(--el-color-primary)';
@@ -642,6 +668,11 @@ const handleDeleteTask = (row) => {
       emit('refreshList');
     })
     .catch(() => {});
+};
+
+// ── Bug 跳转 ──
+const openBug = (bug) => {
+  router.push({ path: '/test/bug', query: { openId: bug.id } });
 };
 
 // ── 进度编辑 ──
@@ -1169,6 +1200,13 @@ import { nextTick } from 'vue';
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  // Bug 标题列专用：无下边距，行内截断
+  .bug-cell__title {
+    margin-bottom: 0;
+    flex: 1;
+    min-width: 0;
   }
 
   &__tags {
