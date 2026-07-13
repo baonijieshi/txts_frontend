@@ -87,6 +87,14 @@ export function removeTestPlanCase(planId: number, caseId: number) {
   return request({ url: `/testcase/plan/${planId}/cases/${caseId}`, method: 'delete' });
 }
 
+export function getTestPlanReport(planId: number) {
+  return request({ url: `/testcase/plan/${planId}/report`, method: 'get' });
+}
+
+export function getTestPlanReportMarkdown(planId: number) {
+  return request({ url: `/testcase/plan/${planId}/report/markdown`, method: 'get' });
+}
+
 // ── 评审 ────────────────────────────────────────────────────
 
 export function createReview(data: Record<string, unknown>) {

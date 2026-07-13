@@ -193,6 +193,15 @@
           <el-button v-if="activeTab !== 'bug'" type="primary" size="default" @click="handleAddTask">
             <el-icon><Plus /></el-icon>新建任务
           </el-button>
+          <!-- Bug 标签页：跳转至 Bug 管理 -->
+          <div v-if="activeTab === 'bug'" class="vdd-toolbar__bug-nav">
+            <span class="vdd-toolbar__bug-hint">
+              共 {{ localBugs.length }} 条 Bug
+            </span>
+            <el-button size="default" text type="primary" @click="goToBugList">
+              查看全部 <span class="arrow-right">&rarr;</span>
+            </el-button>
+          </div>
         </div>
 
         <!-- 内容区 -->
@@ -552,6 +561,14 @@ const handleRejectAcceptanceFromHero = async () => {
 const handleEditVersion = () => {
   emit('edit', props.version);
   emit('update:visible', false);
+};
+
+const goToBugList = () => {
+  if (!props.version) return;
+  router.push({
+    path: '/test/bug',
+    query: { versionId: props.version.id, versionName: props.version.name },
+  });
 };
 
 // ── 进度颜色 ──
@@ -1059,6 +1076,28 @@ import { nextTick } from 'vue';
 
 .vdd-search {
   width: 240px;
+}
+
+.vdd-toolbar__bug-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+}
+
+.vdd-toolbar__bug-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.vdd-toolbar__bug-nav .arrow-right {
+  display: inline-block;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-size: 14px;
+}
+.vdd-toolbar__bug-nav .el-button:hover .arrow-right {
+  transform: translateX(3px);
 }
 
 /* ── 内容区 ── */

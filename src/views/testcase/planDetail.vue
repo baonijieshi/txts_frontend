@@ -24,6 +24,9 @@
             <el-button v-else type="warning" size="small" plain @click="showCreateReview = true">
               <el-icon><Stamp /></el-icon>发起评审
             </el-button>
+            <el-button type="primary" size="small" plain @click="handleGenerateReport">
+              <el-icon><DataAnalysis /></el-icon>生成报告
+            </el-button>
           </div>
         </div>
         <div class="plan-progress">
@@ -319,6 +322,197 @@
       :user-options="userOptions"
       @saved="fetchCases"
     />
+
+    <!-- ═══ 测试报告弹窗 ═══ -->
+    <el-dialog
+      v-model="reportVisible"
+      :title="false"
+      width="960px"
+      destroy-on-close
+      class="test-report-dialog"
+    >
+      <template #header>
+        <div class="report-hero">
+          <div class="report-hero__title-row">
+            <span class="report-hero__icon">
+              <el-icon :size="22"><DataAnalysis /></el-icon>
+            </span>
+            <span class="report-hero__name">测试报告</span>
+            <el-tag size="default" effect="dark" round>{{ reportData?.plan?.name }}</el-tag>
+            <el-button type="success" size="small" plain @click="handleCopyMarkdown">
+              <el-icon><CopyDocument /></el-icon>复制 Markdown
+            </el-button>
+          </div>
+          <div class="report-hero__meta" v-if="reportData?.plan">
+            <span v-if="reportData.plan.version_name" class="report-meta-item">
+              <el-icon><Files /></el-icon>{{ reportData.plan.version_name }}
+            </span>
+            <span class="report-meta-item">
+              <el-icon><User /></el-icon>{{ reportData.plan.creator_name }}
+            </span>
+            <span class="report-meta-item">
+              <el-icon><Calendar /></el-icon>{{ reportData.plan.start_date || '—' }} ~ {{ reportData.plan.end_date || '—' }}
+            </span>
+          </div>
+        </div>
+      </template>
+
+      <div v-if="reportData" class="report-body">
+        <!-- ═══ KPI 统计卡 ═══ -->
+        <div class="report-kpi-grid">
+          <div class="report-kpi">
+            <div class="report-kpi__icon" style="background: linear-gradient(135deg, #667eea, #764ba2)">
+              <el-icon :size="18"><DocumentChecked /></el-icon>
+            </div>
+            <div class="report-kpi__body">
+              <span class="report-kpi__value">{{ reportData.case_stats.total }}</span>
+              <span class="report-kpi__label">总用例数</span>
+            </div>
+          </div>
+          <div class="report-kpi">
+            <div class="report-kpi__icon" style="background: linear-gradient(135deg, #4facfe, #00f2fe)">
+              <el-icon :size="18"><VideoPlay /></el-icon>
+            </div>
+            <div class="report-kpi__body">
+              <span class="report-kpi__value">{{ reportData.case_stats.executed }}</span>
+              <span class="report-kpi__label">已执行</span>
+            </div>
+          </div>
+          <div class="report-kpi success">
+            <div class="report-kpi__icon" style="background: linear-gradient(135deg, #43e97b, #38f9d7)">
+              <el-icon :size="18"><CircleCheckFilled /></el-icon>
+            </div>
+            <div class="report-kpi__body">
+              <span class="report-kpi__value">{{ reportData.case_stats.passed }}</span>
+              <span class="report-kpi__label">通过</span>
+            </div>
+          </div>
+          <div class="report-kpi danger">
+            <div class="report-kpi__icon" style="background: linear-gradient(135deg, #f093fb, #f5576c)">
+              <el-icon :size="18"><CircleCloseFilled /></el-icon>
+            </div>
+            <div class="report-kpi__body">
+              <span class="report-kpi__value">{{ reportData.case_stats.failed }}</span>
+              <span class="report-kpi__label">失败</span>
+            </div>
+          </div>
+          <div class="report-kpi warning">
+            <div class="report-kpi__icon" style="background: linear-gradient(135deg, #fa709a, #fee140)">
+              <el-icon :size="18"><WarningFilled /></el-icon>
+            </div>
+            <div class="report-kpi__body">
+              <span class="report-kpi__value">{{ reportData.case_stats.blocked }}</span>
+              <span class="report-kpi__label">阻塞</span>
+            </div>
+          </div>
+          <div class="report-kpi bug-kpi">
+            <div class="report-kpi__icon" style="background: linear-gradient(135deg, #e74c3c, #c0392b)">
+              <el-icon :size="18"><WarningFilled /></el-icon>
+            </div>
+            <div class="report-kpi__body">
+              <span class="report-kpi__value">{{ reportData.bug_stats.total }}</span>
+              <span class="report-kpi__label">Bug 总数</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ 通过率 + 进度条 ═══ -->
+        <div class="report-rate-section" v-if="reportData.case_stats.total > 0">
+          <div class="report-rate-ring">
+            <svg viewBox="0 0 100 100" class="rate-ring-svg">
+              <circle cx="50" cy="50" r="38" fill="none" stroke="var(--bg-hover)" stroke-width="6" />
+              <circle
+                cx="50" cy="50" r="38" fill="none"
+                :stroke="rateColor(reportData.case_stats.pass_rate)"
+                stroke-width="6" stroke-linecap="round"
+                :stroke-dasharray="2 * Math.PI * 38"
+                :stroke-dashoffset="2 * Math.PI * 38 * (1 - reportData.case_stats.pass_rate / 100)"
+                transform="rotate(-90 50 50)" class="rate-ring-fill"
+              />
+            </svg>
+            <div class="rate-ring-text">
+              <span class="rate-ring-text__value">{{ reportData.case_stats.pass_rate }}%</span>
+              <span class="rate-ring-text__label">通过率</span>
+            </div>
+          </div>
+          <div class="report-rate-bars">
+            <div class="report-bar">
+              <span class="report-bar__label">执行率</span>
+              <div class="report-bar__track">
+                <div class="report-bar__fill" :style="{ width: reportData.case_stats.exec_rate + '%', background: 'var(--el-color-primary)' }" />
+              </div>
+              <span class="report-bar__pct">{{ reportData.case_stats.exec_rate }}%</span>
+            </div>
+            <div class="report-bar">
+              <span class="report-bar__label">通过率</span>
+              <div class="report-bar__track">
+                <div class="report-bar__fill" :style="{ width: reportData.case_stats.pass_rate + '%', background: rateColor(reportData.case_stats.pass_rate) }" />
+              </div>
+              <span class="report-bar__pct">{{ reportData.case_stats.pass_rate }}%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ 失败用例 + 关联 Bug ═══ -->
+        <div v-if="reportData.failed_cases.length > 0" class="report-section">
+          <h4 class="report-section__title">
+            <el-icon :size="16"><CircleCloseFilled /></el-icon>失败用例 ({{ reportData.failed_cases.length }})
+          </h4>
+          <div class="failed-case-list">
+            <div v-for="fc in reportData.failed_cases" :key="fc.case_id" class="failed-case-item">
+              <div class="failed-case__main">
+                <span class="failed-case__title">{{ fc.title }}</span>
+                <span class="failed-case__meta">
+                  <span v-if="fc.executor_name" class="failed-case__executor">{{ fc.executor_name }}</span>
+                  <span v-if="fc.remark" class="failed-case__remark">{{ fc.remark }}</span>
+                </span>
+              </div>
+              <div v-if="fc.bugs.length > 0" class="failed-case__bugs">
+                <el-tag
+                  v-for="bug in fc.bugs" :key="bug.id"
+                  :type="bugSeverityTagType(bug.severity)"
+                  size="small"
+                  class="bug-link-tag"
+                  @click="openBug(bug.id)"
+                >{{ bug.severity }} · {{ bug.title }}</el-tag>
+              </div>
+              <span v-else class="failed-case__no-bug">暂无关联Bug</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ Bug 列表 ═══ -->
+        <div v-if="reportData.bugs.length > 0" class="report-section">
+          <h4 class="report-section__title">
+            <el-icon :size="16"><WarningFilled /></el-icon>Bug 列表 ({{ reportData.bugs.length }})
+          </h4>
+          <div class="bug-mini-list">
+            <div
+              v-for="bug in reportData.bugs" :key="bug.id"
+              class="bug-mini-row"
+              @click="openBug(bug.id)"
+            >
+              <span class="bug-mini-row__dot" :class="'sev-' + bug.severity"></span>
+              <span class="bug-mini-row__title">{{ bug.title }}</span>
+              <el-tag :type="bugStatusTagType(bug.status)" size="small" effect="plain">{{ bug.status }}</el-tag>
+              <span class="bug-mini-row__assignee" v-if="bug.assignee__first_name">
+                <el-icon :size="12"><User /></el-icon>{{ bug.assignee__first_name }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ 空状态 ═══ -->
+        <div v-if="reportData.case_stats.total === 0" class="report-empty">
+          <el-icon :size="48" style="color: var(--text-placeholder)"><DocumentChecked /></el-icon>
+          <p>该计划暂无用例，无法生成报告</p>
+        </div>
+      </div>
+
+      <div v-else class="report-loading" v-loading="reportLoading">
+        <p>正在生成报告...</p>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -331,12 +525,14 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Search, Plus, Calendar, User, Files, VideoPlay, ArrowDown, DocumentChecked, Stamp,
-  InfoFilled, Aim, Warning, CircleCheckFilled, CircleCloseFilled, WarningFilled, RemoveFilled,
+  InfoFilled, Aim, Warning, CircleCheckFilled, CircleCloseFilled, WarningFilled, RemoveFilled, CopyDocument,
+  DataAnalysis,
 } from '@element-plus/icons-vue';
 import {
   getTestPlanDetail, getTestPlanCases, addTestPlanCases,
   updateTestPlanCase, removeTestPlanCase, getTestcaseList,
   createReview, getReviewList, deleteReview,
+  getTestPlanReport, getTestPlanReportMarkdown,
 } from '@/api/testcase';
 import { getUserList } from '@/api/user';
 import { getVersionList } from '@/api/version';
@@ -715,6 +911,59 @@ const reviewProgressColor = (row) => {
   if (row.reject_count > 0) return 'var(--el-color-warning)';
   if ((row.pass_count + row.reject_count) === row.total_count) return 'var(--el-color-success)';
   return 'var(--el-color-primary)';
+};
+
+// ── 测试报告 ──────────────────────────────────────────────────
+const reportVisible = ref(false);
+const reportLoading = ref(false);
+const reportData = ref(null);
+
+const handleGenerateReport = async () => {
+  reportVisible.value = true;
+  reportLoading.value = true;
+  reportData.value = null;
+  try {
+    const res = await getTestPlanReport(planId.value);
+    reportData.value = res.data;
+  } catch {
+    ElMessage.error('生成报告失败');
+    reportVisible.value = false;
+  } finally {
+    reportLoading.value = false;
+  }
+};
+
+const rateColor = (p: number) => {
+  if (p >= 90) return 'var(--el-color-success)';
+  if (p >= 60) return 'var(--el-color-warning)';
+  return 'var(--el-color-danger)';
+};
+
+const bugSeverityTagType = (s: string) => ({
+  致命: 'danger', 严重: 'warning', 一般: 'primary', 轻微: 'info', 建议: '',
+}[s] || 'info');
+
+const bugStatusTagType = (s: string) => ({
+  待处理: 'info', 处理中: 'warning', 已解决: 'success', 已关闭: '', 已拒绝: 'danger', 激活: 'primary',
+}[s] || 'info');
+
+const openBug = (bugId: number) => {
+  router.push({ path: '/test/bug', query: { openId: bugId } });
+};
+
+const handleCopyMarkdown = async () => {
+  try {
+    const res = await getTestPlanReportMarkdown(planId.value);
+    const md = res.data?.markdown || '';
+    if (md) {
+      await navigator.clipboard.writeText(md);
+      ElMessage.success('Markdown 已复制到剪贴板，可直接粘贴到飞书');
+    } else {
+      ElMessage.warning('暂无报告内容');
+    }
+  } catch {
+    ElMessage.error('获取 Markdown 失败');
+  }
 };
 
 onMounted(() => { fetchPlan(); fetchCases(); fetchReviews(); fetchUsers(); });
@@ -1147,6 +1396,214 @@ const resultDropdownOptions = [
 }
 
 // ── popper 全局覆盖（需无 scoped 穿透） ──
+
+// ── 测试报告弹窗 ──────────────────────────────────────────────
+.test-report-dialog {
+  :deep(.el-dialog) {
+    border-radius: 20px;
+    overflow: hidden;
+  }
+  :deep(.el-dialog__header) {
+    padding: 0;
+    margin-right: 0;
+    border-bottom: none;
+  }
+  :deep(.el-dialog__body) {
+    padding: 0;
+  }
+}
+
+.report-hero {
+  padding: 24px 32px 20px;
+  background:
+    radial-gradient(ellipse 80% 120% at 85% 0%, rgba(64, 158, 255, 0.06), transparent 60%),
+    radial-gradient(ellipse 60% 100% at 15% 100%, rgba(103, 194, 58, 0.05), transparent 60%),
+    var(--bg-card);
+  border-bottom: 1px solid var(--border-light);
+
+  &__title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  &__icon {
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--el-color-primary), var(--el-color-primary-light-5));
+    color: #fff;
+  }
+  &__name {
+    font-size: 22px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.5px;
+  }
+  &__meta {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+}
+
+.report-meta-item {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 13px; color: var(--text-secondary);
+}
+
+.report-body {
+  padding: 24px 32px 32px;
+  display: flex; flex-direction: column; gap: 24px;
+  max-height: 65vh; overflow-y: auto;
+}
+
+.report-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+}
+
+.report-kpi {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  &:hover { transform: translateY(-2px); }
+
+  &.success { box-shadow: 0 1px 3px rgba(103, 194, 58, 0.08), var(--shadow-card); }
+  &.danger { box-shadow: 0 1px 3px rgba(245, 108, 108, 0.08), var(--shadow-card); }
+  &.warning { box-shadow: 0 1px 3px rgba(230, 162, 60, 0.08), var(--shadow-card); }
+  &.bug-kpi { box-shadow: 0 1px 3px rgba(231, 76, 60, 0.1), var(--shadow-card); }
+
+  &__icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; color: #fff;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12);
+  }
+  &__body { flex: 1; min-width: 0; }
+  &__value { display: block; font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1.1; }
+  &__label { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; font-weight: 500; }
+}
+
+.report-rate-section {
+  display: flex; align-items: center; gap: 40px;
+  padding: 20px 24px;
+  background: var(--bg-card);
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+}
+
+.report-rate-ring {
+  position: relative; width: 96px; height: 96px; flex-shrink: 0;
+  .rate-ring-svg { width: 100%; height: 100%; }
+  .rate-ring-fill { transition: stroke-dashoffset 0.8s cubic-bezier(.34, 1.56, .64, 1); }
+}
+.rate-ring-text {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  &__value { font-size: 20px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.5px; line-height: 1; }
+  &__label { font-size: 10px; color: var(--text-secondary); margin-top: 2px; font-weight: 500; }
+}
+
+.report-rate-bars {
+  flex: 1; display: flex; flex-direction: column; gap: 14px;
+}
+.report-bar {
+  display: flex; align-items: center; gap: 12px;
+  &__label { font-size: 12px; font-weight: 600; color: var(--text-secondary); min-width: 48px; }
+  &__track { flex: 1; height: 8px; background: var(--bg-hover); border-radius: 4px; overflow: hidden; }
+  &__fill { height: 100%; border-radius: 4px; transition: width 0.6s cubic-bezier(.34, 1.56, .64, 1); }
+  &__pct { font-size: 13px; font-weight: 700; color: var(--text-primary); min-width: 36px; text-align: right; }
+}
+
+.report-section {
+  &__title {
+    display: flex; align-items: center; gap: 6px;
+    margin: 0 0 12px;
+    font-size: 14px; font-weight: 650; color: var(--text-primary);
+  }
+}
+
+.failed-case-list {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.failed-case-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--el-color-danger-light-9);
+  border-radius: 10px;
+  gap: 16px; flex-wrap: wrap;
+}
+.failed-case__main {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+}
+.failed-case__title {
+  font-size: 14px; font-weight: 600; color: var(--el-color-danger);
+}
+.failed-case__meta {
+  display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-secondary);
+}
+.failed-case__bugs {
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.bug-link-tag {
+  cursor: pointer;
+  transition: transform 0.15s;
+  &:hover { transform: scale(1.04); }
+}
+.failed-case__no-bug {
+  font-size: 12px; color: var(--text-placeholder); white-space: nowrap;
+}
+
+.bug-mini-list {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.bug-mini-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-hover);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+  &:hover { background: var(--bg-active); }
+
+  &__dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    &.sev-致命 { background: var(--el-color-danger); }
+    &.sev-严重 { background: var(--el-color-warning); }
+    &.sev-一般 { background: var(--el-color-primary); }
+    &.sev-轻微 { background: var(--el-color-success); }
+    &.sev-建议 { background: var(--text-secondary); }
+  }
+  &__title {
+    flex: 1; font-size: 13px; color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  &__assignee {
+    font-size: 12px; color: var(--text-secondary);
+    display: flex; align-items: center; gap: 3px; white-space: nowrap;
+  }
+}
+
+.report-empty {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 40px 0; gap: 10px;
+  p { color: var(--text-secondary); font-size: 14px; margin: 0; }
+}
+
+.report-loading {
+  display: flex; align-items: center; justify-content: center;
+  height: 200px;
+  p { color: var(--text-secondary); font-size: 14px; }
+}
+
+@media (max-width: 900px) {
+  .report-kpi-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 600px) {
+  .report-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .report-rate-section { flex-direction: column; gap: 20px; align-items: center; }
+}
+
 </style>
 
 <style lang="scss">

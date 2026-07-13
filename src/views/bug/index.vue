@@ -501,13 +501,17 @@ onMounted(async () => {
   await fetchList();
 
   // 如果 URL 带 openId 参数，自动打开对应 Bug 详情
-  const { openId } = route.query;
+  const { openId, versionId } = route.query;
   if (openId) {
     await nextTick();
     const target = bugList.value.find((b) => String(b.id) === String(openId));
     if (target) {
       handleDetail(target);
     }
+  }
+  // 如果 URL 带 versionId 参数，自动设置版本筛选
+  if (versionId) {
+    queryParams.value.versionId = Number(versionId);
   }
 
   const [uRes, pRes, vRes] = await Promise.all([
