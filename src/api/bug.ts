@@ -28,6 +28,14 @@ export function deleteBug(id: number) {
   return request({ url: `/bug/${id}`, method: 'delete' });
 }
 
+export function suggestAssignee(params?: Record<string, unknown>) {
+  return request({ url: '/bug/suggest-assignee', method: 'get', params });
+}
+
 export function batchDeleteBug(ids: number[]) {
   return request({ url: '/bug/batch-delete', method: 'post', data: { ids } });
+}
+
+export function batchUpdateBug(ids: number[], data: Record<string, unknown>) {
+  return request({ url: '/bug/batch-update', method: 'post', data: { ids, data } });
 }

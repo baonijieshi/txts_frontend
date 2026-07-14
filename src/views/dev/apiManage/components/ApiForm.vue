@@ -60,14 +60,35 @@
         </div>
         <div class="panel-body" :class="{ 'is-expanded': paramsExpanded }">
           <el-tabs v-model="activeParamTab" class="param-tabs">
+            <el-tab-pane name="path">
+              <template #label>Path <span v-if="form.parameters.path.length" class="tab-count">{{ form.parameters.path.length }}</span></template>
+              <div class="param-table">
+                <div v-for="(row, idx) in form.parameters.path" :key="idx" class="param-row">
+                  <span class="row-idx">{{ idx + 1 }}</span>
+                  <el-input v-model="row.key" placeholder="Key" size="small" />
+                  <el-select v-model="row.type" size="small" style="width:88px;flex-shrink:0">
+                    <el-option v-for="t in FIELD_TYPES" :key="t" :label="t" :value="t" />
+                  </el-select>
+                  <el-input v-model="row.value" placeholder="Value" size="small" />
+                  <el-input v-model="row.description" placeholder="描述" size="small" />
+                  <el-checkbox v-model="row.required" style="flex-shrink:0">必填</el-checkbox>
+                  <el-button size="small" type="danger" link @click="removeParam('path', idx)">删除</el-button>
+                </div>
+                <el-button size="small" type="primary" link @click="addParam('path')">+ 添加参数</el-button>
+              </div>
+            </el-tab-pane>
             <el-tab-pane name="query">
               <template #label>Query <span v-if="form.parameters.query.length" class="tab-count">{{ form.parameters.query.length }}</span></template>
               <div class="param-table">
                 <div v-for="(row, idx) in form.parameters.query" :key="idx" class="param-row">
                   <span class="row-idx">{{ idx + 1 }}</span>
                   <el-input v-model="row.key" placeholder="Key" size="small" />
+                  <el-select v-model="row.type" size="small" style="width:88px;flex-shrink:0">
+                    <el-option v-for="t in FIELD_TYPES" :key="t" :label="t" :value="t" />
+                  </el-select>
                   <el-input v-model="row.value" placeholder="Value" size="small" />
                   <el-input v-model="row.description" placeholder="描述" size="small" />
+                  <el-checkbox v-model="row.required" style="flex-shrink:0">必填</el-checkbox>
                   <el-button size="small" type="danger" link @click="removeParam('query', idx)">删除</el-button>
                 </div>
                 <el-button size="small" type="primary" link @click="addParam('query')">+ 添加参数</el-button>
@@ -79,8 +100,12 @@
                 <div v-for="(row, idx) in form.parameters.header" :key="idx" class="param-row">
                   <span class="row-idx">{{ idx + 1 }}</span>
                   <el-input v-model="row.key" placeholder="Key" size="small" />
+                  <el-select v-model="row.type" size="small" style="width:88px;flex-shrink:0">
+                    <el-option v-for="t in FIELD_TYPES" :key="t" :label="t" :value="t" />
+                  </el-select>
                   <el-input v-model="row.value" placeholder="Value" size="small" />
                   <el-input v-model="row.description" placeholder="描述" size="small" />
+                  <el-checkbox v-model="row.required" style="flex-shrink:0">必填</el-checkbox>
                   <el-button size="small" type="danger" link @click="removeParam('header', idx)">删除</el-button>
                 </div>
                 <el-button size="small" type="primary" link @click="addParam('header')">+ 添加参数</el-button>
@@ -229,7 +254,8 @@ const activeParamTab = ref('query');
 const totalParamCount = computed(() => {
   const q = form.parameters.query.length;
   const h = form.parameters.header.length;
-  return q + h;
+  const p = form.parameters.path.length;
+  return q + h + p;
 });
 
 // body 类型独立存储
@@ -332,8 +358,9 @@ const form = reactive({
   path: '',
   description: '',
   service: null,
-  parameters: { query: [], header: [] },
+  parameters: { query: [], header: [], path: [] },
   response_example: '',
+  response_data: {},
 });
 
 const rules = {
@@ -342,7 +369,7 @@ const rules = {
   path: [{ required: true, message: '请输入接口路径', trigger: 'blur' }],
 };
 
-function addParam(tab) { form.parameters[tab].push({ key: '', value: '', description: '' }); }
+function addParam(tab) { form.parameters[tab].push({ key: '', value: '', type: 'string', description: '', required: false }); }
 function removeParam(tab, index) { form.parameters[tab].splice(index, 1); }
 
 function resetForm() {
@@ -353,7 +380,9 @@ function resetForm() {
   form.service = props.defaultServiceId ?? null;
   form.parameters.query = [];
   form.parameters.header = [];
+  form.parameters.path = [];
   form.response_example = '';
+  form.response_data = {};
   restoreBody(null);
   paramsExpanded.value = false;
   responseExpanded.value = false;
@@ -375,9 +404,13 @@ watch(() => props.visible, async (val) => {
           form.description = d.description || '';
           form.service = d.service ?? null;
           form.response_example = d.response_example || '';
+          form.response_data = d.response_data || {};
           const p = d.parameters || {};
-          form.parameters.query = Array.isArray(p.query) ? p.query : [];
-          form.parameters.header = Array.isArray(p.header) ? p.header : [];
+          // 补全历史数据中缺失的 type 字段
+          const normalizeParam = (arr) => (Array.isArray(arr) ? arr : []).map((item) => ({ type: 'string', required: false, ...item }));
+          form.parameters.query = normalizeParam(p.query);
+          form.parameters.header = normalizeParam(p.header);
+          form.parameters.path = normalizeParam(p.path);
           restoreBody(p.body);
         }
       } catch { ElMessage.error('获取接口详情失败'); }
@@ -401,9 +434,11 @@ async function handleSave() {
       parameters: {
         query: form.parameters.query,
         header: form.parameters.header,
+        path: form.parameters.path,
         body: serializeBody(),
       },
       response_example: form.response_example,
+      response_data: form.response_data,
     };
     if (props.editingId) {
       await updateApi(props.editingId, payload);

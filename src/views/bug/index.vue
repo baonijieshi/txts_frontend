@@ -29,6 +29,25 @@
     </div>
 
     <div class="table-section">
+      <!-- 视图切换 -->
+      <div class="view-toggle-bar">
+        <div class="view-toggle">
+          <button
+            v-for="v in viewOptions"
+            :key="v.key"
+            class="view-btn"
+            :class="{ active: currentView === v.key }"
+            @click="currentView = v.key"
+          >
+            <el-icon :size="15"><component :is="v.icon" /></el-icon>
+            <span>{{ v.label }}</span>
+          </button>
+        </div>
+        <div class="view-stat">{{ filteredList.length }} 条</div>
+      </div>
+
+      <!-- ═══ 表格视图（默认） ═══ -->
+      <template v-if="currentView === 'table'">
       <!-- 工具栏 -->
       <div class="list-toolbar">
         <div class="toolbar-left">
@@ -82,6 +101,9 @@
         </div>
 
         <div class="toolbar-right">
+          <el-button plain @click="handleExportCSV">
+            <el-icon><Download /></el-icon>导出
+          </el-button>
           <template v-if="selectedIds.length > 0">
             <span class="selected-tip">已选 {{ selectedIds.length }} 条</span>
             <el-button size="small" type="danger" plain @click="handleBatchDelete">
@@ -108,9 +130,20 @@
         <el-table-column type="selection" width="46" />
         <el-table-column prop="title" label="Bug 标题" min-width="260" show-overflow-tooltip>
           <template #default="{ row }">
-            <div class="bug-title-cell">
+            <div class="bug-title-cell" @dblclick.stop="startInlineEdit(row)">
               <span :class="['severity-dot', `sev-${row.severity}`]" :title="row.severity" />
-              <span class="bug-title">{{ row.title }}</span>
+              <template v-if="inlineEditingId === row.id">
+                <input
+                  ref="inlineInputRef"
+                  v-model="inlineEditText"
+                  class="inline-title-input"
+                  @keydown.enter="saveInlineEdit(row)"
+                  @keydown.escape="cancelInlineEdit"
+                  @blur="saveInlineEdit(row)"
+                  @click.stop
+                />
+              </template>
+              <span v-else class="bug-title">{{ row.title }}</span>
             </div>
           </template>
         </el-table-column>
@@ -186,12 +219,24 @@
         </el-table-column>
         <template #empty>
           <div class="empty-state">
-            <el-icon size="48" style="color: var(--text-placeholder)"><WarningFilled /></el-icon>
-            <p v-if="hasActiveFilter">
-              未找到符合条件的 Bug
-              <el-button type="primary" link @click="handleResetAllFilters">清除筛选</el-button>
-            </p>
-            <p v-else>暂无 Bug 记录</p>
+            <div class="empty-icon-wrap">
+              <el-icon :size="48"><WarningFilled /></el-icon>
+            </div>
+            <template v-if="hasActiveFilter">
+              <p class="empty-title">未找到符合条件的 Bug</p>
+              <div class="empty-actions">
+                <el-button @click="handleResetAllFilters">清除筛选</el-button>
+              </div>
+            </template>
+            <template v-else>
+              <p class="empty-title">暂无 Bug 记录</p>
+              <p class="empty-desc">项目运行良好！如有问题，点击下方提交第一个 Bug</p>
+              <div class="empty-actions">
+                <el-button type="primary" @click="handleAdd">
+                  <el-icon><Plus /></el-icon>提交 Bug
+                </el-button>
+              </div>
+            </template>
           </div>
         </template>
       </el-table>
@@ -206,9 +251,70 @@
           background
         />
       </div>
+    </template>
+
+    <!-- ═══ 看板视图 ═══ -->
+    <div v-if="currentView === 'kanban'" class="kanban-board">
+      <div
+        v-for="col in kanbanColumns"
+        :key="col.status"
+        class="kanban-col"
+      >
+        <div class="kanban-col-header">
+          <span class="kanban-col-dot" :style="{ background: col.color }"></span>
+          <span class="kanban-col-title">{{ col.status }}</span>
+          <span class="kanban-col-count">{{ col.items.length }}</span>
+        </div>
+        <div class="kanban-col-body">
+          <div
+            v-for="bug in col.items"
+            :key="bug.id"
+            class="kanban-card"
+            @click="handleRowClick(bug, null, null)"
+          >
+            <div class="kanban-card-top">
+              <span :class="['severity-tag', `st-${bug.severity}`]">{{ bug.severity }}</span>
+              <span :class="['priority-tag', `pt-${bug.priority?.toLowerCase()}`]">{{ bug.priority }}</span>
+            </div>
+            <div class="kanban-card-title">{{ bug.title }}</div>
+            <div class="kanban-card-footer">
+              <span class="kanban-card-assignee" v-if="bug.assignee_name">{{ bug.assignee_name }}</span>
+              <span class="kanban-card-time">{{ formatDate(bug.created_at) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <BugDialog
+    <!-- ═══ 日历视图 ═══ -->
+    <div v-if="currentView === 'calendar'" class="calendar-view">
+      <div
+        v-for="day in calendarDays"
+        :key="day.date"
+        class="calendar-day-group"
+      >
+        <div class="cal-day-header">
+          <span class="cal-day-label">{{ day.label }}</span>
+          <span class="cal-day-count">{{ day.items.length }}</span>
+        </div>
+        <div
+          v-for="bug in day.items"
+          :key="bug.id"
+          class="cal-card"
+          @click="handleRowClick(bug, null, null)"
+        >
+          <span :class="['severity-dot', `sev-${bug.severity}`]"></span>
+          <span class="cal-card-title">{{ bug.title }}</span>
+          <span :class="['priority-tag', `pt-${bug.priority?.toLowerCase()}`]">{{ bug.priority }}</span>
+        </div>
+      </div>
+      <div v-if="calendarDays.length === 0" class="cal-empty">
+        <span>没有 Bug 记录</span>
+      </div>
+    </div>
+  </div>
+
+  <BugDialog
       v-model:visible="dialogVisible"
       :editing-id="editingId"
       :initial-form="editingForm"
@@ -247,11 +353,13 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   Search, Filter, Plus, Delete, ArrowDown, WarningFilled,
   UserFilled, EditPen, Clock, CircleCloseFilled, CircleCheckFilled,
+  Grid, DataBoard, Calendar as CalendarIcon, Download,
 } from '@element-plus/icons-vue';
 import {
   getBugList, updateBug, activateBug, deleteBug, batchDeleteBug,
 } from '@/api/bug';
 import { getUserList } from '@/api/user';
+import { exportToCSV } from '@/utils/export';
 import { getProjectList } from '@/api/project';
 import { getVersionList } from '@/api/version';
 import BugDialog from './components/BugDialog.vue';
@@ -287,6 +395,57 @@ const projectList = ref([]);
 const versionOptions = ref([]);
 
 const viewMode = ref('all');
+
+// ── 多视图切换 ──
+const currentView = ref('table');
+const viewOptions = [
+  { key: 'table', label: '表格', icon: Grid },
+  { key: 'kanban', label: '看板', icon: DataBoard },
+  { key: 'calendar', label: '日历', icon: CalendarIcon },
+];
+
+const kanbanColumns = computed(() => {
+  const groups = { '待处理': [], '处理中': [], '已解决': [], '已关闭': [], '已拒绝': [] };
+  filteredList.value.forEach((bug) => {
+    const s = bug.status;
+    if (groups[s]) groups[s].push(bug);
+    else groups['待处理'].push(bug);
+  });
+  const colors = {
+    '待处理': 'var(--text-secondary)',
+    '处理中': 'var(--el-color-warning)',
+    '已解决': 'var(--el-color-success)',
+    '已关闭': 'var(--text-placeholder)',
+    '已拒绝': 'var(--el-color-danger)',
+  };
+  return Object.entries(groups).map(([status, items]) => ({
+    status, items, color: colors[status] || 'var(--text-secondary)',
+  }));
+});
+
+const calendarDays = computed(() => {
+  const groups = {};
+  const today = new Date();
+  filteredList.value.forEach((bug) => {
+    const dateStr = bug.created_at ? bug.created_at.slice(0, 10) : '未知';
+    if (!groups[dateStr]) {
+      const d = new Date(dateStr);
+      const diffDays = Math.ceil((today.getTime() - d.getTime()) / 86400000);
+      let label = dateStr;
+      if (diffDays === 0) label = '今天';
+      else if (diffDays === 1) label = '昨天';
+      else if (diffDays < 7) label = `${diffDays}天前`;
+      groups[dateStr] = { date: dateStr, label, items: [] };
+    }
+    groups[dateStr].items.push(bug);
+  });
+  return Object.values(groups).sort((a, b) => b.date.localeCompare(a.date));
+});
+
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  return dateStr.slice(0, 10);
+}
 const queryParams = ref({
   title: '',
   severity: '',
@@ -314,6 +473,40 @@ function debounceFetch() {
     currentPage.value = 1;
     fetchList();
   }, 300);
+}
+
+// ── 行内编辑标题 ──
+const inlineEditingId = ref(null);
+const inlineEditText = ref('');
+const inlineInputRef = ref<HTMLInputElement | null>(null);
+
+function startInlineEdit(row: any) {
+  inlineEditingId.value = row.id;
+  inlineEditText.value = row.title;
+  nextTick(() => {
+    const el = document.querySelector('.inline-title-input') as HTMLInputElement;
+    el?.focus();
+    el?.select();
+  });
+}
+
+async function saveInlineEdit(row: any) {
+  if (inlineEditingId.value !== row.id) return;
+  const newTitle = inlineEditText.value.trim();
+  if (newTitle && newTitle !== row.title) {
+    try {
+      await updateBug(row.id, { title: newTitle });
+      row.title = newTitle;
+    } catch {
+      // 保存失败，还原
+      inlineEditText.value = row.title;
+    }
+  }
+  inlineEditingId.value = null;
+}
+
+function cancelInlineEdit() {
+  inlineEditingId.value = null;
 }
 
 async function fetchList() {
@@ -497,11 +690,33 @@ async function handleBatchDelete() {
   fetchList();
 }
 
+function handleExportCSV() {
+  exportToCSV(bugList.value, [
+    { label: 'Bug 标题', value: 'title' },
+    { label: '严重程度', value: 'severity' },
+    { label: '优先级', value: 'priority' },
+    { label: '状态', value: 'status' },
+    { label: '指派给', value: 'assignee_name' },
+    { label: '创建人', value: 'reporter_name' },
+    { label: '版本', value: 'version_name' },
+    { label: '创建时间', value: 'created_at' },
+  ], 'Bug列表');
+}
+
 onMounted(async () => {
   await fetchList();
 
+  const { openId, versionId, create } = route.query;
+
+  // 如果 URL 带 create 参数，自动打开新建弹窗
+  if (create) {
+    await nextTick();
+    handleAdd();
+    router.replace({ query: {} });
+    return;
+  }
+
   // 如果 URL 带 openId 参数，自动打开对应 Bug 详情
-  const { openId, versionId } = route.query;
   if (openId) {
     await nextTick();
     const target = bugList.value.find((b) => String(b.id) === String(openId));
@@ -647,6 +862,22 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+/* ── 行内编辑输入框 ── */
+.inline-title-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--el-color-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-7);
+  transition: box-shadow .15s;
+}
+
 .priority-dot {
   display: inline-block;
   padding: 1px 7px;
@@ -702,14 +933,258 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center;
   padding: 48px 0;
+}
+.empty-icon-wrap {
+  color: var(--text-placeholder);
+  opacity: .45;
+  margin-bottom: 8px;
+}
+.empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-regular);
+  margin: 0 0 4px;
+}
+.empty-desc {
+  font-size: 13px;
   color: var(--text-secondary);
-  p { margin-top: 12px; font-size: 14px; }
+  margin: 0 0 16px;
+}
+.empty-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .pagination-wrapper {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* ── 视图切换条 ── */
+.view-toggle-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.view-toggle {
+  display: flex;
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+.view-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  &:hover { color: var(--text-primary); }
+  &.active {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-card);
+    font-weight: 600;
+  }
+  .el-icon { display: inline-flex; }
+}
+.view-stat {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  font-weight: 500;
+}
+
+/* ── 看板视图 ── */
+.kanban-board {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 4px 0 12px;
+  min-height: 320px;
+  &::-webkit-scrollbar { height: 5px; }
+  &::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+}
+.kanban-col {
+  min-width: 200px;
+  max-width: 240px;
+  flex: 1;
+  background: var(--bg-hover);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+}
+.kanban-col-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 8px;
+  flex-shrink: 0;
+}
+.kanban-col-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.kanban-col-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.kanban-col-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  padding: 1px 7px;
+  border-radius: 7px;
+}
+.kanban-col-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  &::-webkit-scrollbar { width: 4px; }
+  &::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+}
+.kanban-card {
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.15s, box-shadow 0.15s;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  }
+}
+.kanban-card-top {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.severity-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  &.st-致命, &.st-严重 { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
+  &.st-一般 { background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
+  &.st-轻微 { background: var(--el-color-info-light-9); color: var(--el-color-info); }
+  &.st-建议 { background: var(--bg-hover); color: var(--text-secondary); }
+}
+.priority-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  &.pt-p0 { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
+  &.pt-p1 { background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
+  &.pt-p2 { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+  &.pt-p3 { background: var(--bg-hover); color: var(--text-secondary); }
+}
+.kanban-card-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.kanban-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.kanban-card-assignee {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.kanban-card-time {
+  color: var(--text-placeholder);
+}
+
+/* ── 日历视图 ── */
+.calendar-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  &::-webkit-scrollbar { width: 5px; }
+  &::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+}
+.calendar-day-group {}
+.cal-day-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px 6px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  z-index: 1;
+}
+.cal-day-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.cal-day-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  padding: 1px 7px;
+  border-radius: 6px;
+}
+.cal-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s;
+  &:hover { background: var(--bg-hover); }
+  &:not(:last-child) { border-bottom: 1px solid var(--border-light); }
+}
+.cal-card-title {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cal-empty {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0;
+  color: var(--text-placeholder);
+  font-size: 13px;
+}
+
+[data-theme='dark'] {
+  .kanban-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
 }
 
 @media (max-width: 1100px) { .kpi-strip { grid-template-columns: repeat(3, 1fr); } }

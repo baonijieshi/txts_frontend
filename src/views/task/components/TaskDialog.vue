@@ -78,7 +78,22 @@
       <div class="form-group">
         <div class="form-group__title">描述</div>
         <el-form-item label="">
-          <el-input v-model="form.description" type="textarea" :rows="5" placeholder="请输入任务描述" />
+          <div style="width:100%">
+            <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:4px">
+              <el-button
+                v-if="ai.isAvailable.value"
+                size="small"
+                text
+                type="primary"
+                :loading="ai.isProcessing.value"
+                @click="handleAiGenerateDesc"
+              >
+                <el-icon :size="14"><MagicStick /></el-icon>
+                AI 生成描述
+              </el-button>
+            </div>
+            <el-input v-model="form.description" type="textarea" :rows="5" placeholder="请输入任务描述" />
+          </div>
         </el-form-item>
       </div>
     </el-form>
@@ -93,8 +108,10 @@
 // @ts-nocheck
 import { ref, watch, computed } from 'vue';
 import { ElMessage } from 'element-plus';
+import { MagicStick } from '@element-plus/icons-vue';
 import { Connection } from '@element-plus/icons-vue';
 import { createTask, updateTask } from '@/api/task';
+import { useAi } from '@/composables/useAi';
 import ModernSelect from '@/components/ModernSelect.vue';
 import UserCascader from '@/components/UserCascader.vue';
 
@@ -108,6 +125,7 @@ const props = defineProps({
 
 const emit = defineEmits(['update:visible', 'saved']);
 
+const ai = useAi();
 const formRef = ref(null);
 const title = ref('新建任务');
 const statusOptions = ['未开始', '进行中', '已完成'];
@@ -177,6 +195,34 @@ const handleSubmit = async () => {
     emit('saved');
   } catch {
     // ignore
+  }
+};
+
+// ── AI 生成任务描述 ──
+const handleAiGenerateDesc = async () => {
+  if (!form.value.name) {
+    ElMessage.warning('请先填写任务名称');
+    return;
+  }
+  const prompt = [
+    '你是一个专业的项目管理助理。请根据以下任务信息生成一段任务描述。',
+    '',
+    `任务名称：${form.value.name}`,
+    `任务类型：${form.value.type}`,
+    `优先级：${form.value.priority}`,
+    '',
+    form.value.type === '开发'
+      ? '请按以下格式输出：\n## 技术方案\n（描述技术实现思路）\n\n## 涉及模块\n（列出受影响的模块）\n\n## 注意事项\n（兼容性、数据迁移等）'
+      : form.value.type === '测试'
+        ? '请按以下格式输出：\n## 测试范围\n（描述需要测试的功能点）\n\n## 测试策略\n（功能测试/性能测试/兼容性等）\n\n## 风险点\n（描述可能的高风险区域）'
+        : '请按以下格式输出：\n## 任务目标\n（描述本任务要达成的目标）\n\n## 具体事项\n（逐条列出待办事项）\n\n## 交付物\n（描述最终的交付产出）',
+  ].join('\n');
+  try {
+    const result = await ai.complete(prompt);
+    form.value.description = result;
+    ElMessage.success('描述已生成');
+  } catch (e: any) {
+    ElMessage.error(e.message || 'AI 生成失败');
   }
 };
 </script>

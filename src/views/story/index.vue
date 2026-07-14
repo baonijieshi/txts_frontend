@@ -133,6 +133,9 @@
 
         <!-- 右：操作 -->
         <div class="toolbar-actions">
+          <el-button plain @click="handleExportCSV">
+            <el-icon><Download /></el-icon>导出
+          </el-button>
           <el-button plain @click="handleFeishuImport">
             <el-icon><Upload /></el-icon>飞书导入
           </el-button>
@@ -305,9 +308,10 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
-  Search, Plus, Upload, Edit, Delete, RefreshLeft, DocumentAdd, Stamp,
+  Search, Plus, Upload, Edit, Delete, RefreshLeft, DocumentAdd, Stamp, Download,
 } from '@element-plus/icons-vue';
 import { getStoryList, deleteStory } from '@/api/story';
+import { exportToCSV } from '@/utils/export';
 import { getProductList } from '@/api/product';
 import { getUserList } from '@/api/user';
 import StoryDialog from './components/StoryDialog.vue';
@@ -446,6 +450,12 @@ const fetchList = async () => {
 onMounted(() => {
   fetchOptions();
   fetchList().then(() => {
+    // 如果 URL 带 create 参数，自动打开新建弹窗
+    if (route.query.create) {
+      handleAdd();
+      router.replace({ query: {} });
+      return;
+    }
     // 如果 URL 带 openId 参数，自动打开对应需求的详情
     openStoryFromQuery();
   });
@@ -545,6 +555,20 @@ const handleDetail = (row) => {
 const handleRowClick = (row) => {
   handleDetail(row);
 };
+
+function handleExportCSV() {
+  exportToCSV(stories.value, [
+    { label: '需求标题', value: 'title' },
+    { label: '所属产品', value: 'product_name' },
+    { label: '优先级', value: 'priority' },
+    { label: '状态', value: 'status' },
+    { label: '审核状态', value: 'review_status' },
+    { label: '指派给', value: 'assignee_name' },
+    { label: '创建人', value: 'creator_name' },
+    { label: '预估工时', value: 'estimate' },
+    { label: '创建时间', value: 'created_at' },
+  ], '需求列表');
+}
 
 // ── 审核 ──────────────────────────────────────────────
 const reviewStatusType = (s) => {

@@ -123,6 +123,9 @@
             </el-button>
             <el-divider direction="vertical" />
           </template>
+          <el-button plain @click="handleExportCSV">
+            <el-icon><Download /></el-icon>导出
+          </el-button>
           <el-button v-if="activeTab === 'version'" type="warning" plain @click="importDialogVisible = true">
             <el-icon><Upload /></el-icon>导入 XMind
           </el-button>
@@ -282,6 +285,7 @@ import { getUserList } from '@/api/user';
 import { getStoryList } from '@/api/story';
 import { getVersionList } from '@/api/version';
 import { getModuleList } from '@/api/module';
+import { exportToCSV } from '@/utils/export';
 import UserCascader from '@/components/UserCascader.vue';
 import TestcaseDialog from './components/TestcaseDialog.vue';
 import TestcaseDetailDrawer from './components/TestcaseDetailDrawer.vue';
@@ -560,6 +564,18 @@ const handleDetailNext = () => {
 
 // ── 导入 ──────────────────────────────────────────────────────
 const importDialogVisible = ref(false);
+
+function handleExportCSV() {
+  exportToCSV(testcases.value, [
+    { label: '用例标题', value: 'title' },
+    { label: '优先级', value: 'priority' },
+    { label: '类型', value: 'type' },
+    { label: '模块', value: 'module' },
+    { label: '执行结果', value: 'last_result' },
+    { label: '创建人', value: 'creator_name' },
+    { label: '创建时间', value: 'createTime' },
+  ], '用例列表');
+}
 
 onMounted(() => { fetchOptions(); fetchList(); });
 </script>

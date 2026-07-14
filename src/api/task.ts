@@ -15,3 +15,7 @@ export function updateTask(id: number, data: Record<string, unknown>) {
 export function deleteTask(id: number) {
   return request({ url: `/task/${id}`, method: 'delete' });
 }
+
+export function batchUpdateTask(ids: number[], data: Record<string, unknown>) {
+  return request({ url: '/task/batch-update', method: 'post', data: { ids, data } });
+}

@@ -193,19 +193,85 @@
       <div v-else class="panel-empty"><el-icon :size="36"><FolderOpened /></el-icon><p>暂无版本数据</p></div>
     </section>
 
+    <!-- ═══ AI 周报 ═══ -->
+    <section class="ai-report-section" v-if="ai.isAvailable.value">
+      <div class="panel-top">
+        <h3 class="panel-title"><el-icon :size="18"><TrendCharts /></el-icon>AI 周报</h3>
+        <el-button
+          size="small"
+          :loading="ai.isProcessing.value"
+          :disabled="ai.isProcessing.value"
+          @click="handleGenerateReport"
+        >
+          <el-icon :size="14"><MagicStick /></el-icon>
+          生成本周报告
+        </el-button>
+      </div>
+      <div v-if="weeklyReport" class="report-content">
+        <div class="report-text">{{ weeklyReport }}</div>
+        <div class="report-actions">
+          <el-button size="small" text @click="copyReport">复制</el-button>
+          <el-button size="small" text @click="weeklyReport = ''">关闭</el-button>
+        </div>
+      </div>
+      <div v-else class="report-hint">
+        <span>点击「生成本周报告」自动汇总本周工作数据，由 AI 生成周报</span>
+      </div>
+    </section>
+
     <!-- ═══ 快捷创建 FAB ═══ -->
-    <el-dropdown trigger="click" @command="handleQuickCreate" placement="top-end">
-      <button class="fab-btn">
-        <el-icon :size="22"><Plus /></el-icon>
-      </button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item command="task"><el-icon><EditPen /></el-icon>新建任务</el-dropdown-item>
-          <el-dropdown-item command="bug"><el-icon><Warning /></el-icon>提交Bug</el-dropdown-item>
-          <el-dropdown-item command="story"><el-icon><Document /></el-icon>创建需求</el-dropdown-item>
-        </el-dropdown-menu>
+    <!-- ═══ 快捷创建 FAB ═══ -->
+    <el-popover
+      v-model:visible="fabPopoverVisible"
+      placement="top-end"
+      :width="280"
+      trigger="click"
+      :offset="16"
+      popper-class="fab-popover"
+    >
+      <div class="fab-menu">
+        <div class="fab-menu-section">
+          <div class="fab-menu-label">快速记录</div>
+          <div class="fab-quick-note">
+            <textarea
+              v-model="quickNoteText"
+              class="fab-note-input"
+              placeholder="写点什么...（可转为 Bug/任务/需求）"
+              rows="2"
+              @keydown.enter.meta="handleQuickNoteSave"
+            ></textarea>
+            <div class="fab-note-actions">
+              <span class="fab-note-hint" v-if="quickNoteText">⌘+Enter 保存</span>
+              <span class="fab-note-hint" v-else>临时便签，不会丢失</span>
+              <el-button
+                v-if="quickNoteText"
+                size="small"
+                type="primary"
+                @click="handleQuickNoteSave"
+              >保存</el-button>
+            </div>
+          </div>
+        </div>
+        <div class="fab-menu-divider" />
+        <div class="fab-menu-section">
+          <div class="fab-menu-label">创建</div>
+          <button
+            v-for="item in fabCreateItems"
+            :key="item.cmd"
+            class="fab-menu-item"
+            @click="handleQuickCreate(item.cmd); fabPopoverVisible = false"
+          >
+            <el-icon class="fab-menu-item-icon" :size="16"><component :is="item.icon" /></el-icon>
+            <span>{{ item.label }}</span>
+          </button>
+        </div>
+      </div>
+      <template #reference>
+        <button class="fab-btn" :class="{ 'is-active': fabPopoverVisible }">
+          <el-icon :size="22"><Plus /></el-icon>
+        </button>
       </template>
-    </el-dropdown>
+    </el-popover>
   </div>
 </template>
 
@@ -227,6 +293,7 @@ import { getVersionList } from '@/api/version';
 import { getStoryList } from '@/api/story';
 import { getPeriodList, getObjectiveList } from '@/api/okr';
 import { getNotificationList } from '@/api/notification';
+import { getDashboardStats } from '@/api/dashboard';
 
 const router = useRouter();
 const store = useStore();
@@ -301,6 +368,64 @@ const recentNotifs = ref<any[]>([]);
 // ── 数据获取 ──
 const fetchData = async () => {
   try {
+    // 优先使用聚合仪表盘端点（单次请求替代10次）
+    try {
+      const dashRes = await getDashboardStats();
+      const d = dashRes.data;
+      if (d) {
+        // KPI 数值
+        const newValues = d.kpi || {};
+        stats.value.forEach((s) => { s.value = newValues[s.key] ?? 0; });
+        await nextTick();
+        Object.entries(newValues).forEach(([key, val]) => {
+          const v = val as number;
+          displayValues.value[key] = 0;
+          if (v > 0) animateValue(key, 0, v);
+        });
+
+        // 待办
+        todoTasks.value = (d.todoTasks || []).map((t) => ({
+          id: t.id, name: t.name, versionId: t.version_id,
+          versionName: t.versionName || '', priority: t.priority, deadline: t.deadline,
+        }));
+
+        // Bug
+        recentBugs.value = (d.recentBugs || []).map((b) => ({
+          id: b.id, title: b.title, severity: b.severity, status: b.status, assignee: b.assignee || '',
+        }));
+
+        // 版本
+        versionProgress.value = (d.versions || []).map((v) => ({
+          id: v.id, name: v.name, manager: v.manager || '',
+          _devProgress: v.devProgress || 0, devProgress: 0,
+          _acceptanceProgress: v.acceptanceProgress || 0, acceptanceProgress: 0,
+          _testProgress: v.testProgress || 0, testProgress: 0,
+          status: v.status, taskDone: v.taskDone || 0, taskTotal: v.taskTotal || 0,
+          test_status: v.test_status || '未提测',
+          planCaseTotal: v.planCaseTotal || 0,
+          planCaseExecuted: v.planCaseExecuted || 0,
+        }));
+        await nextTick();
+        requestAnimationFrame(() => {
+          versionProgress.value = versionProgress.value.map((v) => ({
+            ...v, devProgress: v._devProgress, testProgress: v._testProgress, acceptanceProgress: v._acceptanceProgress,
+          }));
+        });
+
+        // OKR
+        if (d.okr) {
+          okrData.value = d.okr;
+        }
+
+        // 通知
+        recentNotifs.value = d.recentNotifications || [];
+        return; // 聚合端点成功，跳过独立请求
+      }
+    } catch {
+      // 聚合端点失败，回退到独立请求
+    }
+
+    // ── 回退：独立请求 ──
     const userId = store.state.user?.id;
     const [
       projRes, taskInProgressRes, bugPendingRes, testcaseRes,
@@ -338,18 +463,18 @@ const fetchData = async () => {
     });
 
     // 待办
-    todoTasks.value = (todoRes.data.list || []).map((t: any) => ({
+    todoTasks.value = (todoRes.data.list || []).map((t) => ({
       id: t.id, name: t.name, versionId: t.version,
       versionName: t.version_name || '', priority: t.priority, deadline: t.deadline,
     }));
 
     // Bug
-    recentBugs.value = (recentBugRes.data.list || []).map((b: any) => ({
+    recentBugs.value = (recentBugRes.data.list || []).map((b) => ({
       id: b.id, title: b.title, severity: b.severity, status: b.status, assignee: b.assignee_name || '',
     }));
 
     // 版本进度（动画）
-    const versionsRaw = (versionListRes.data.list || []).map((v: any) => ({
+    const versionsRaw = (versionListRes.data.list || []).map((v) => ({
       id: v.id, name: v.name, manager: v.manager_name || '',
       _devProgress: v.dev_task_progress || 0, devProgress: 0,
       _acceptanceProgress: v.acceptance_task_progress || 0, acceptanceProgress: 0,
@@ -362,7 +487,7 @@ const fetchData = async () => {
     versionProgress.value = versionsRaw;
     await nextTick();
     requestAnimationFrame(() => {
-      versionProgress.value = versionsRaw.map((v: any) => ({
+      versionProgress.value = versionsRaw.map((v) => ({
         ...v, devProgress: v._devProgress, testProgress: v._testProgress, acceptanceProgress: v._acceptanceProgress,
       }));
     });
@@ -370,13 +495,13 @@ const fetchData = async () => {
     // OKR 摘要
     const periods = periodRes.data?.list || [];
     if (periods.length > 0) {
-      const currentPeriod = periods[0]; // 最新周期
+      const currentPeriod = periods[0];
       try {
         const objRes = await getObjectiveList({ periodId: currentPeriod.id, ownerId: 'me' });
         const objectives = objRes.data?.list || [];
-        const totalKRs = objectives.reduce((sum: number, o: any) => sum + (o.key_results?.length || 0), 0);
+        const totalKRs = objectives.reduce((sum, o) => sum + (o.key_results?.length || 0), 0);
         const avgProgress = objectives.length > 0
-          ? objectives.reduce((sum: number, o: any) => sum + (o.progress || 0), 0) / objectives.length : 0;
+          ? objectives.reduce((sum, o) => sum + (o.progress || 0), 0) / objectives.length : 0;
         okrData.value = {
           periodName: currentPeriod.name,
           objCount: objectives.length,
@@ -443,7 +568,7 @@ const handleNotifClick = async (n: any) => {
     story: (id: number) => ({ path: '/story', query: { openId: id } }),
     bug: (id: number) => ({ path: '/test/bug', query: { openId: id } }),
     okr: () => ({ path: '/okr' }),
-    ticket: (id: number) => ({ path: '/ticket', query: { openId: id } }),
+    ticket: (id: number) => ({ path: '/delivery/ticket', query: { openId: id } }),
   };
   const fn = routeMap[n.source_type];
   if (fn) router.push(fn(n.source_id)).catch(() => {});
@@ -452,6 +577,99 @@ const handleNotifClick = async (n: any) => {
 const handleQuickCreate = (cmd: string) => {
   const map: Record<string, string> = { task: '/project/versions', bug: '/test/bug', story: '/story' };
   if (map[cmd]) router.push(map[cmd]);
+};
+
+// ── 升级版 FAB：快速记录 + 创建菜单 ──
+import { EditPen, Warning, Document, TrendCharts, MagicStick } from '@element-plus/icons-vue';
+const fabPopoverVisible = ref(false);
+const quickNoteText = ref('');
+const quickNotes = ref<{ text: string; time: string }[]>([]);
+
+const fabCreateItems = [
+  { label: '新建任务', cmd: 'task', icon: EditPen },
+  { label: '提交 Bug', cmd: 'bug', icon: Warning },
+  { label: '创建需求', cmd: 'story', icon: Document },
+];
+
+const handleQuickNoteSave = () => {
+  const text = quickNoteText.value.trim();
+  if (!text) return;
+  quickNotes.value.unshift({
+    text,
+    time: new Date().toLocaleString(),
+  });
+  // 限制只保留最近 20 条
+  if (quickNotes.value.length > 20) quickNotes.value = quickNotes.value.slice(0, 20);
+  // 持久化到 localStorage
+  localStorage.setItem('tx_quick_notes', JSON.stringify(quickNotes.value));
+  quickNoteText.value = '';
+  fabPopoverVisible.value = false;
+  ElMessage.success('便签已保存');
+};
+
+// 初始化时从 localStorage 恢复便签
+import { ElMessage } from 'element-plus';
+import { useAi } from '@/composables/useAi';
+const initQuickNotes = () => {
+  try {
+    const saved = localStorage.getItem('tx_quick_notes');
+    if (saved) quickNotes.value = JSON.parse(saved);
+  } catch { /* ignore */ }
+};
+initQuickNotes();
+
+// ── AI 周报 ──
+const ai = useAi();
+const weeklyReport = ref('');
+
+const handleGenerateReport = async () => {
+  try {
+    // 收集本周数据
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+
+    const [bugRes, taskRes, verRes] = await Promise.all([
+      getBugList({ page: 1, pageSize: 999 }),
+      getTaskList({ page: 1, pageSize: 999 }),
+      getVersionList({ page: 1, pageSize: 10 }),
+    ]);
+
+    const allBugs = bugRes.data?.list || [];
+    const allTasks = taskRes.data?.list || [];
+    const versions = verRes.data?.list || [];
+
+    const newBugs = allBugs.filter((b) => b.created_at >= weekAgo);
+    const resolvedBugs = allBugs.filter((b) => b.status === '已解决' && b.resolved_at >= weekAgo);
+    const inProgressTasks = allTasks.filter((t) => t.status === '进行中');
+    const completedTasks = allTasks.filter((t) => t.status === '已完成');
+
+    const prompt = [
+      '你是一个项目管理助手。请根据以下本周工作数据生成一份简洁的周报。',
+      '',
+      `## 数据概览`,
+      `- Bug：新增 ${newBugs.length} 个，解决 ${resolvedBugs.length} 个`,
+      `- 任务：进行中 ${inProgressTasks.length} 个，已完成 ${completedTasks.length} 个`,
+      versions.length > 0 ? `- 版本：${versions.map((v) => v.name).join('、')}` : '',
+      '',
+      '请按以下格式生成（纯文字，不使用 Markdown 标记）：',
+      '【本周工作亮点】\n- 亮点1\n- 亮点2\n',
+      '【存在问题】\n- 问题1\n',
+      '【下周计划】\n- 计划1\n- 计划2',
+    ].filter(Boolean).join('\n');
+
+    const result = await ai.complete(prompt);
+    weeklyReport.value = result;
+  } catch (e: any) {
+    ElMessage.error('生成失败：' + (e.message || '请检查 AI 配置'));
+  }
+};
+
+const copyReport = () => {
+  navigator.clipboard.writeText(weeklyReport.value).then(() => {
+    ElMessage.success('已复制到剪贴板');
+  }).catch(() => {
+    ElMessage.warning('复制失败，请手动复制');
+  });
 };
 </script>
 
@@ -644,6 +862,74 @@ const handleQuickCreate = (cmd: string) => {
   transition: transform .2s, box-shadow .2s;
   &:hover { transform: scale(1.08); box-shadow: 0 6px 24px rgba(0,0,0,.22); }
   &:active { transform: scale(.95); }
+  &.is-active { transform: scale(1.08) rotate(45deg); box-shadow: 0 6px 24px rgba(0,0,0,.22); }
+}
+
+/* ── FAB Popover 菜单 ── */
+.fab-menu { padding: 6px 0; }
+.fab-menu-section { padding: 0 6px; }
+.fab-menu-label {
+  font-size: 10px; font-weight: 700; color: var(--text-placeholder);
+  text-transform: uppercase; letter-spacing: 0.8px; padding: 4px 10px 6px;
+}
+.fab-menu-divider { height: 1px; background: var(--border-light); margin: 4px 0; }
+
+.fab-quick-note { padding: 0 4px 4px; }
+.fab-note-input {
+  width: 100%; border: 1px solid var(--border-color); border-radius: 8px;
+  padding: 8px 10px; font-size: 13px; font-family: inherit;
+  color: var(--text-primary); background: var(--bg-elevated);
+  resize: none; outline: none; line-height: 1.5;
+  transition: border-color .15s;
+  &:focus { border-color: var(--el-color-primary); }
+  &::placeholder { color: var(--text-placeholder); }
+}
+.fab-note-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 6px; padding: 0 2px;
+}
+.fab-note-hint { font-size: 11px; color: var(--text-placeholder); }
+
+.fab-menu-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 9px 12px; border: none; border-radius: 8px;
+  background: transparent; cursor: pointer;
+  font-size: 13px; font-family: inherit; color: var(--text-primary);
+  font-weight: 500; transition: background .12s;
+  &:hover { background: var(--bg-hover); }
+}
+.fab-menu-item-icon { color: var(--text-secondary); flex-shrink: 0; }
+
+/* ── AI 周报 ── */
+.ai-report-section {
+  background: var(--bg-card);
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.report-content {
+  padding: 0 20px 16px;
+}
+.report-text {
+  font-size: 13px;
+  color: var(--text-regular);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  background: var(--bg-elevated);
+  padding: 14px 16px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+.report-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.report-hint {
+  padding: 0 20px 16px;
+  font-size: 13px;
+  color: var(--text-placeholder);
 }
 
 /* ── 响应式 ── */

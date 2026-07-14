@@ -120,8 +120,24 @@
 
     <!-- 从接口库导入弹窗 -->
     <el-dialog v-model="apiPickerVisible" title="从接口库导入" width="700px" append-to-body>
-      <el-input v-model="apiSearch" placeholder="搜索接口名称或路径" clearable style="margin-bottom:12px"
-        @input="searchApis" />
+      <div class="api-picker-filter">
+        <el-input v-model="apiSearch" placeholder="搜索接口名称或路径" clearable
+          class="api-picker-search" @input="searchApis" />
+        <el-select
+          v-model="apiServiceFilter"
+          placeholder="全部服务"
+          clearable
+          class="api-picker-service"
+          @change="onServiceFilterChange"
+        >
+          <el-option
+            v-for="svc in apiServiceList"
+            :key="svc.id"
+            :label="svc.name"
+            :value="svc.id"
+          />
+        </el-select>
+      </div>
       <el-table :data="apiOptions" height="360" @selection-change="selectedApis = $event">
         <el-table-column type="selection" width="46" />
         <el-table-column label="Method" width="90">
@@ -144,7 +160,7 @@
 // @ts-nocheck
 import { ref, watch } from 'vue';
 import { Plus } from '@element-plus/icons-vue';
-import { getApiList } from '@/api/apiManage';
+import { getApiList, getServiceList } from '@/api/apiManage';
 import KvEditor from './KvEditor.vue';
 import AssertionEditor from './AssertionEditor.vue';
 import ExtractionEditor from './ExtractionEditor.vue';
@@ -262,16 +278,34 @@ const apiPickerVisible = ref(false);
 const apiSearch = ref('');
 const apiOptions = ref([]);
 const selectedApis = ref([]);
+const apiServiceList = ref([]);
+const apiServiceFilter = ref(null);
 let searchTimer = null;
 
 async function importFromApi() {
   apiPickerVisible.value = true;
-  await loadApis();
+  apiServiceFilter.value = null;
+  await Promise.all([loadServices(), loadApis()]);
+}
+
+async function loadServices() {
+  try {
+    const res = await getServiceList();
+    if (res.code === 200) apiServiceList.value = res.data || [];
+  } catch { apiServiceList.value = []; }
 }
 
 async function loadApis() {
-  const res = await getApiList({ search: apiSearch.value, pageSize: 100 });
+  const params: Record<string, any> = { search: apiSearch.value, pageSize: 99999 };
+  if (apiServiceFilter.value) {
+    params.service_id = apiServiceFilter.value;
+  }
+  const res = await getApiList(params);
   apiOptions.value = res.data?.list || [];
+}
+
+function onServiceFilterChange() {
+  loadApis();
 }
 
 function searchApis() {
@@ -387,6 +421,21 @@ defineExpose({ getData });
     margin-left: auto;
     display: flex;
     gap: 4px;
+  }
+}
+
+.api-picker-filter {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+
+  .api-picker-search {
+    flex: 1;
+  }
+
+  .api-picker-service {
+    width: 180px;
+    flex-shrink: 0;
   }
 }
 </style>

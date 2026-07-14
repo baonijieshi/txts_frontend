@@ -43,6 +43,9 @@
           <el-button v-if="hasFilter" link type="primary" @click="handleReset">清除筛选</el-button>
         </div>
         <div class="toolbar-right">
+          <el-button plain @click="handleExportCSV">
+            <el-icon><Download /></el-icon>导出
+          </el-button>
           <el-button type="primary" @click="handleAdd">
             <el-icon><Plus /></el-icon>新建任务
           </el-button>
@@ -53,7 +56,17 @@
         <el-table-column type="index" label="" width="60" />
         <el-table-column prop="name" label="任务名称" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-link type="primary" @click="handleDetail(row)">{{ row.name }}</el-link>
+            <template v-if="inlineEditingId === row.id">
+              <input
+                v-model="inlineEditText"
+                class="inline-title-input"
+                @keydown.enter="saveInlineEdit(row)"
+                @keydown.escape="cancelInlineEdit"
+                @blur="saveInlineEdit(row)"
+                @click.stop
+              />
+            </template>
+            <el-link v-else type="primary" @click="handleDetail(row)" @dblclick.stop="startInlineEdit(row)">{{ row.name }}</el-link>
           </template>
         </el-table-column>
         <el-table-column prop="version_name" label="所属版本" min-width="120" show-overflow-tooltip />
@@ -232,11 +245,12 @@
 
 <script setup lang="ts">
 // @ts-nocheck
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Tickets, Search, Plus, List, Loading, Clock, CircleCheckFilled, DArrowRight } from '@element-plus/icons-vue';
+import { Tickets, Search, Plus, List, Loading, Clock, CircleCheckFilled, DArrowRight, Download } from '@element-plus/icons-vue';
 import { getTaskList, updateTask, deleteTask } from '@/api/task';
+import { exportToCSV } from '@/utils/export';
 import { getUserList } from '@/api/user';
 import { getVersionList } from '@/api/version';
 import UserCascader from '@/components/UserCascader.vue';
@@ -437,6 +451,52 @@ const handleDetail = (row) => {
   detailRow.value = row;
   detailVisible.value = true;
 };
+
+function handleExportCSV() {
+  exportToCSV(tasks.value, [
+    { label: '任务名称', value: 'name' },
+    { label: '所属版本', value: 'version_name' },
+    { label: '类型', value: 'type' },
+    { label: '优先级', value: 'priority' },
+    { label: '状态', value: 'status' },
+    { label: '进度', value: (row) => (row.progress ?? 0) + '%' },
+    { label: '指派给', value: 'assignee_name' },
+    { label: '截止日期', value: 'deadline' },
+    { label: '创建时间', value: 'created_at' },
+  ], '任务列表');
+}
+
+// ── 行内编辑标题 ──
+const inlineEditingId = ref(null);
+const inlineEditText = ref('');
+
+function startInlineEdit(row: any) {
+  inlineEditingId.value = row.id;
+  inlineEditText.value = row.name;
+  nextTick(() => {
+    const el = document.querySelector('.inline-title-input') as HTMLInputElement;
+    el?.focus();
+    el?.select();
+  });
+}
+
+async function saveInlineEdit(row: any) {
+  if (inlineEditingId.value !== row.id) return;
+  const newName = inlineEditText.value.trim();
+  if (newName && newName !== row.name) {
+    try {
+      await updateTask(row.id, { name: newName });
+      row.name = newName;
+    } catch {
+      inlineEditText.value = row.name;
+    }
+  }
+  inlineEditingId.value = null;
+}
+
+function cancelInlineEdit() {
+  inlineEditingId.value = null;
+}
 </script>
 
 <style scoped lang="scss">
@@ -524,6 +584,20 @@ const handleDetail = (row) => {
     color: var(--text-inverse);
   }
   span { font-size: 13px; color: var(--text-primary); }
+}
+
+/* ── 行内编辑输入框 ── */
+.inline-title-input {
+  width: 100%;
+  border: 1px solid var(--el-color-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-7);
 }
 
 .pagination-wrapper {

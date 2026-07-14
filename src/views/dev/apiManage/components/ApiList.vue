@@ -22,6 +22,9 @@
           <el-button type="danger" plain size="small" @click="handleBulkDelete">
             <el-icon><Delete /></el-icon>删除
           </el-button>
+          <el-button type="primary" plain size="small" @click="handleAiGenerateTest">
+            <el-icon><MagicStick /></el-icon>AI 生成测试
+          </el-button>
         </template>
       </div>
       <div class="toolbar-right">
@@ -109,17 +112,23 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="110" fixed="right" align="center">
+      <el-table-column label="操作" width="130" fixed="right" align="center">
         <template #default="{ row }">
           <div class="row-actions">
-            <el-tooltip content="调试" placement="top" :show-after="400">
-              <el-icon class="action-btn success" @click.stop="$emit('debug', row)"><VideoPlay /></el-icon>
+            <el-tooltip content="调试" placement="top">
+              <el-button size="small" circle text type="success" @click.stop="$emit('debug', row)">
+                <el-icon><VideoPlay /></el-icon>
+              </el-button>
             </el-tooltip>
-            <el-tooltip content="编辑" placement="top" :show-after="400">
-              <el-icon class="action-btn primary" @click.stop="$emit('edit', row)"><Edit /></el-icon>
+            <el-tooltip content="编辑" placement="top">
+              <el-button size="small" circle text @click.stop="$emit('edit', row)">
+                <el-icon><Edit /></el-icon>
+              </el-button>
             </el-tooltip>
-            <el-tooltip content="删除" placement="top" :show-after="400">
-              <el-icon class="action-btn danger" @click.stop="$emit('delete', row)"><Delete /></el-icon>
+            <el-tooltip content="删除" placement="top">
+              <el-button size="small" circle text type="danger" @click.stop="$emit('delete', row)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
             </el-tooltip>
           </div>
         </template>
@@ -154,7 +163,7 @@
 // @ts-nocheck
 import { ref } from 'vue';
 import {
-  Search, Delete, Plus, Upload, Edit, VideoPlay, Document,
+  Search, Delete, Plus, Upload, Edit, VideoPlay, Document, MagicStick,
 } from '@element-plus/icons-vue';
 import { ElMessageBox } from 'element-plus';
 
@@ -170,11 +179,12 @@ defineProps({
 const emit = defineEmits([
   'row-click', 'edit', 'delete', 'bulk-delete', 'bulk-set-service',
   'debug', 'search', 'filter-method', 'page-change', 'size-change',
-  'add', 'import',
+  'add', 'import', 'aiGenerateTest',
 ]);
 
 const searchKeyword = ref('');
 const selectedIds = ref([]);
+const selectedRows = ref([]);
 const tableRef = ref(null);
 const bulkSetServiceVisible = ref(false);
 const bulkServiceId = ref(null);
@@ -202,6 +212,7 @@ function handleSearchInput(val) {
 
 function handleSelectionChange(rows) {
   selectedIds.value = rows.map((r) => r.id);
+  selectedRows.value = rows;
 }
 
 function handleRowClick(row) {
@@ -227,6 +238,11 @@ function handleBulkSetService() {
   bulkServiceId.value = null;
   selectedIds.value = [];
   tableRef.value?.clearSelection();
+}
+
+function handleAiGenerateTest() {
+  if (selectedRows.value.length === 0) return;
+  emit('aiGenerateTest', [...selectedRows.value]);
 }
 </script>
 
@@ -336,24 +352,7 @@ function handleBulkSetService() {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.action-btn {
-  font-size: 15px;
-  padding: 5px;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-
-  &:hover {
-    &.success { color: var(--el-color-success); background: var(--el-color-success-light-9); }
-    &.primary { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
-    &.danger { color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
-  }
+  gap: 2px;
 }
 
 // 空状态
@@ -404,6 +403,5 @@ function handleBulkSetService() {
 
 :deep(.clickable-row:hover > td) {
   background: var(--el-color-primary-light-9) !important;
-  .row-actions { opacity: 1; }
 }
 </style>

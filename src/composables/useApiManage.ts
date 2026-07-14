@@ -10,6 +10,7 @@ import {
 export default function useApiManage() {
   const apiList = ref([]);
   const total = ref(0);
+  const methodCounts = ref({ GET: 0, POST: 0, PUT: 0, PATCH: 0, DELETE: 0 });
   const loading = ref(false);
   const searchKeyword = ref('');
   const filterMethod = ref('');
@@ -29,6 +30,9 @@ export default function useApiManage() {
       if (res.code === 200) {
         apiList.value = res.data.list || res.data.results || res.data || [];
         total.value = res.data.total ?? res.data.count ?? apiList.value.length;
+        if (res.data.method_counts) {
+          methodCounts.value = res.data.method_counts;
+        }
       } else {
         ElMessage.error(res.message || '获取接口列表失败');
       }
@@ -84,6 +88,7 @@ export default function useApiManage() {
   return {
     apiList,
     total,
+    methodCounts,
     loading,
     searchKeyword,
     filterMethod,

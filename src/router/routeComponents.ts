@@ -28,6 +28,8 @@ const views: Record<string, () => Promise<any>> = {
   'settings-departments': () => import('@/views/settings/organization.vue'),
   'settings-roles': () => import('@/views/settings/roles.vue'),
 
+  'settings-ai': () => import('@/views/settings/ai.vue'),
+
   'settings-modules': () => import('@/views/settings/modules.vue'),
   'settings-menus': () => import('@/views/settings/menus.vue'),
   okr: () => import('@/views/okr/index.vue'),

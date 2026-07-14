@@ -48,13 +48,29 @@
       <div class="section-block">
         <div class="section-title">请求参数</div>
         <el-tabs v-model="activeTab" class="param-tabs">
+          <el-tab-pane name="path">
+            <template #label>Path <span v-if="pathParams.length" class="tab-count">{{ pathParams.length }}</span></template>
+            <div v-if="pathParams.length > 0" class="param-list">
+              <div v-for="(row, i) in pathParams" :key="i" class="param-item">
+                <span class="param-key">{{ row.key }}</span>
+                <el-tag size="small" effect="plain" class="param-type-tag">{{ row.type || 'string' }}</el-tag>
+                <span class="param-colon">:</span>
+                <span class="param-val">{{ row.value || '-' }}</span>
+                <el-tag v-if="row.required" size="small" type="danger" effect="plain" class="param-required">必填</el-tag>
+                <span v-if="row.description" class="param-desc">// {{ row.description }}</span>
+              </div>
+            </div>
+            <el-empty v-else description="无 Path 参数" :image-size="48" />
+          </el-tab-pane>
           <el-tab-pane name="query">
             <template #label>Query <span v-if="queryParams.length" class="tab-count">{{ queryParams.length }}</span></template>
             <div v-if="queryParams.length > 0" class="param-list">
               <div v-for="(row, i) in queryParams" :key="i" class="param-item">
                 <span class="param-key">{{ row.key }}</span>
+                <el-tag size="small" effect="plain" class="param-type-tag">{{ row.type || 'string' }}</el-tag>
                 <span v-if="row.value" class="param-eq">=</span>
                 <span v-if="row.value" class="param-val">{{ row.value }}</span>
+                <el-tag v-if="row.required" size="small" type="danger" effect="plain" class="param-required">必填</el-tag>
                 <span v-if="row.description" class="param-desc">// {{ row.description }}</span>
               </div>
             </div>
@@ -65,8 +81,10 @@
             <div v-if="headerParams.length > 0" class="param-list">
               <div v-for="(row, i) in headerParams" :key="i" class="param-item">
                 <span class="param-key">{{ row.key }}</span>
+                <el-tag size="small" effect="plain" class="param-type-tag">{{ row.type || 'string' }}</el-tag>
                 <span class="param-colon">:</span>
                 <span class="param-val">{{ row.value || '-' }}</span>
+                <el-tag v-if="row.required" size="small" type="danger" effect="plain" class="param-required">必填</el-tag>
                 <span v-if="row.description" class="param-desc">// {{ row.description }}</span>
               </div>
             </div>
@@ -113,6 +131,38 @@
         </div>
         <pre class="response-pre" v-html="highlightJson(api.response_example)" />
       </div>
+
+      <!-- 响应状态码 -->
+      <div v-if="responseStatusList.length > 0" class="section-block">
+        <div class="section-title">响应状态</div>
+        <div class="resp-status-pills">
+          <button
+            v-for="rs in responseStatusList"
+            :key="rs.code"
+            class="status-pill"
+            :class="{ 'is-active': selectedRespStatus === rs.code, [`status-${rs.code.charAt(0)}`]: true }"
+            @click="selectedRespStatus = selectedRespStatus === rs.code ? '' : rs.code"
+          >
+            <span class="sp-code">{{ rs.code }}</span>
+            <span class="sp-desc">{{ rs.description }}</span>
+          </button>
+        </div>
+        <div v-if="selectedRespFields.length > 0" class="resp-fields">
+          <div class="json-field-header">
+            <span class="col-name">字段名</span>
+            <span class="col-type">类型</span>
+            <span class="col-required">必填</span>
+            <span class="col-desc">描述</span>
+          </div>
+          <div v-for="(f, i) in selectedRespFields" :key="i" class="json-field-row">
+            <span class="row-idx">{{ i + 1 }}</span>
+            <span class="field-name">{{ f.key }}</span>
+            <el-tag size="small" effect="plain" class="field-type">{{ f.type }}</el-tag>
+            <span v-if="f.required" class="field-required">required</span>
+            <span class="field-desc">{{ f.description }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <template #footer>
@@ -143,6 +193,10 @@ defineEmits(['update:visible', 'edit', 'delete', 'debug']);
 
 const activeTab = ref('query');
 
+const pathParams = computed(() => {
+  const p = props.api?.parameters || {};
+  return Array.isArray(p.path) ? p.path : [];
+});
 const queryParams = computed(() => {
   const p = props.api?.parameters || {};
   return Array.isArray(p.query) ? p.query : [];
@@ -170,6 +224,25 @@ const bodyText = computed(() => {
   const body = props.api?.parameters?.body;
   if (typeof body?.content === 'string') return body.content;
   return '';
+});
+
+// 响应数据：statusCode -> { description, contentType, fields }
+const responseStatusList = computed(() => {
+  const rd = props.api?.response_data;
+  if (!rd || typeof rd !== 'object') return [];
+  return Object.entries(rd).map(([code, info]) => ({
+    code,
+    description: info?.description || '',
+    contentType: info?.contentType || '',
+    fields: Array.isArray(info?.fields) ? info.fields : [],
+  }));
+});
+
+const selectedRespStatus = ref('');
+const selectedRespFields = computed(() => {
+  if (!selectedRespStatus.value) return [];
+  const entry = props.api?.response_data?.[selectedRespStatus.value];
+  return Array.isArray(entry?.fields) ? entry.fields : [];
 });
 
 function copyPath() {
@@ -478,6 +551,111 @@ function highlightJson(data) {
   :deep(.json-number) { color: #b5cea8; }
   :deep(.json-boolean) { color: #569cd6; }
   :deep(.json-null) { color: #569cd6; }
+}
+
+// 响应状态码 pills
+.resp-status-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  font-size: 13px;
+
+  &:hover {
+    border-color: var(--el-color-primary);
+  }
+
+  &.is-active {
+    background: var(--el-color-primary-light-9);
+    border-color: var(--el-color-primary);
+    color: var(--el-color-primary);
+  }
+
+  &.status-2.is-active {
+    background: var(--el-color-success-light-9);
+    border-color: var(--el-color-success);
+    color: var(--el-color-success);
+  }
+
+  &.status-4.is-active {
+    background: var(--el-color-warning-light-9);
+    border-color: var(--el-color-warning);
+    color: var(--el-color-warning);
+  }
+
+  &.status-5.is-active {
+    background: var(--el-color-danger-light-9);
+    border-color: var(--el-color-danger);
+    color: var(--el-color-danger);
+  }
+
+  .sp-code {
+    font-weight: 700;
+    font-family: 'Consolas', 'Monaco', monospace;
+  }
+
+  .sp-desc {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+}
+
+// 响应字段列表
+.resp-fields {
+  margin-top: 8px;
+}
+
+.field-name {
+  font-weight: 600;
+  color: var(--el-color-primary);
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  flex: 2;
+  min-width: 0;
+}
+
+.field-type {
+  flex: 0 0 auto;
+}
+
+.field-required {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.field-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 2;
+  min-width: 0;
+}
+
+.param-required {
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.param-type-tag {
+  flex-shrink: 0;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 10px;
 }
 
 // Footer

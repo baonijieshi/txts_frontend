@@ -1,15 +1,20 @@
 <template>
   <div class="ticket-view">
-    <!-- 统计条 -->
-    <div class="stats-strip">
+    <!-- KPI 统计卡片 -->
+    <div class="kpi-strip">
       <div
         v-for="item in statItems"
         :key="item.key"
-        :class="['stat-chip', { active: viewMode === item.key }]"
+        :class="['kpi-pill', { active: viewMode === item.key }, item.cls]"
         @click="switchView(item.key)"
       >
-        <span class="chip-label">{{ item.label }}</span>
-        <span :class="['chip-value', item.cls]">{{ stats[item.key] }}</span>
+        <div class="kpi-icon" :style="{ background: item.gradient }">
+          <el-icon :size="18"><component :is="item.icon" /></el-icon>
+        </div>
+        <div class="kpi-body">
+          <span class="kpi-value">{{ stats[item.key] }}</span>
+          <span class="kpi-label">{{ item.label }}</span>
+        </div>
       </div>
     </div>
 
@@ -57,24 +62,18 @@
             <el-option v-for="s in STEPS" :key="s" :label="s" :value="s" />
           </el-select>
 
-          <el-popover placement="bottom-start" :width="340" trigger="click">
+          <el-popover placement="bottom-start" :width="280" trigger="click">
             <template #reference>
               <el-button :type="moreFilterCount > 0 ? 'primary' : ''" plain size="small">
                 <el-icon><Filter /></el-icon>
                 <span v-if="moreFilterCount > 0" class="filter-count">{{ moreFilterCount }}</span>
               </el-button>
             </template>
-            <el-form :model="queryParams" label-width="80px" size="small">
-              <el-form-item label="问题模块">
-                <el-select v-model="queryParams.module" placeholder="全部" clearable filterable style="width:100%">
-                  <el-option v-for="m in moduleList" :key="m.id" :label="m.fullName || m.name" :value="m.id" />
+            <el-form :model="queryParams" label-width="60px" size="small">
+              <el-form-item label="版本">
+                <el-select v-model="queryParams.versionId" placeholder="全部" clearable filterable style="width:100%">
+                  <el-option v-for="v in versionList" :key="v.id" :label="v.name" :value="v.id" />
                 </el-select>
-              </el-form-item>
-              <el-form-item label="当前处理人">
-                <UserCascader v-model="queryParams.assignee" :user-list="userList" placeholder="全部" />
-              </el-form-item>
-              <el-form-item label="提交人">
-                <UserCascader v-model="queryParams.reporter" :user-list="userList" placeholder="全部" />
               </el-form-item>
               <div style="text-align:right; margin-top:4px">
                 <el-button size="small" @click="handleReset">清空</el-button>
@@ -85,6 +84,9 @@
         </div>
 
         <div class="toolbar-right">
+          <el-button plain @click="handleExportCSV">
+            <el-icon><Download /></el-icon>导出
+          </el-button>
           <template v-if="selectedIds.length > 0">
             <span class="selected-tip">已选 {{ selectedIds.length }} 项</span>
             <el-button size="small" type="danger" plain @click="handleBatchDelete">
@@ -160,8 +162,18 @@
         </el-table-column>
         <template #empty>
           <div class="empty-state">
-            <el-icon size="48" style="color: var(--text-placeholder)"><Tickets /></el-icon>
-            <p>暂无问题记录</p>
+            <div class="empty-icon-wrap">
+              <el-icon :size="48"><Tickets /></el-icon>
+            </div>
+            <p class="empty-title">暂无线上问题</p>
+            <p class="empty-desc" v-if="!hasActiveFilter">还没有记录任何线上问题，点击下方按钮开始记录</p>
+            <p class="empty-desc" v-else>没有符合筛选条件的问题</p>
+            <div class="empty-actions">
+              <el-button v-if="hasActiveFilter" @click="handleReset">清除筛选</el-button>
+              <el-button v-else type="primary" @click="handleAdd">
+                <el-icon><Plus /></el-icon>提交第一个问题
+              </el-button>
+            </div>
           </div>
         </template>
       </el-table>
@@ -235,19 +247,23 @@ import {
   ref, reactive, computed, onMounted,
 } from 'vue';
 import { useStore } from 'vuex';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
-  Search, Filter, Plus, Delete, Tickets,
+  Search, Filter, Plus, Delete, Tickets, Download,
+  UserFilled, Clock, WarningFilled, EditPen,
 } from '@element-plus/icons-vue';
 import { getTicketList, getTicketStats, deleteTicket, updateTicket } from '@/api/ticket';
+import { exportToCSV } from '@/utils/export';
+import { getVersionList } from '@/api/version';
 import { getUserList } from '@/api/user';
-import { getModuleFlatList } from '@/api/module';
-import UserCascader from '@/components/UserCascader.vue';
 import { STEPS, STEP_ROLE_MAP, typeOptions } from './ticketConstants';
 import TicketDialog from './components/TicketDialog.vue';
 import TicketDetailDrawer from './components/TicketDetailDrawer.vue';
 
 const store = useStore();
+const route = useRoute();
+const router = useRouter();
 const currentUserId = computed(() => store.state.user.id);
 
 const list = ref([]);
@@ -258,7 +274,7 @@ const pageSize = ref(20);
 const userList = ref([]);
 const testUserList = ref([]);
 const devUserList = ref([]);
-const moduleList = ref([]);
+const versionList = ref([]);
 const selectedIds = ref([]);
 const viewMode = ref('mine');
 
@@ -267,8 +283,7 @@ const defaultQuery = () => ({
   ticket_type: '',
   priority: '',
   status: '',
-  module: null,
-  assignee: null,
+  versionId: null,
   test_assignee: null,
   dev_assignee: null,
   reporter: null,
@@ -278,11 +293,11 @@ const queryParams = ref(defaultQuery());
 const stats = ref({ total: 0, mine: 0, created: 0, open: 0, urgent: 0 });
 
 const statItems = [
-  { key: 'total', label: '全部', cls: '' },
-  { key: 'mine', label: '待我处理', cls: 'primary' },
-  { key: 'open', label: '处理中', cls: 'warning' },
-  { key: 'urgent', label: 'P0紧急', cls: 'danger' },
-  { key: 'created', label: '我提交的', cls: 'info' },
+  { key: 'total', label: '全部问题', cls: '', icon: Tickets, gradient: 'linear-gradient(135deg, #667eea, #764ba2)' },
+  { key: 'mine', label: '待我处理', cls: 'primary', icon: UserFilled, gradient: 'linear-gradient(135deg, #f093fb, #f5576c)' },
+  { key: 'open', label: '处理中', cls: 'warning', icon: Clock, gradient: 'linear-gradient(135deg, #fa709a, #fee140)' },
+  { key: 'urgent', label: 'P0 紧急', cls: 'danger', icon: WarningFilled, gradient: 'linear-gradient(135deg, #e74c3c, #c0392b)' },
+  { key: 'created', label: '我提交的', cls: 'info', icon: EditPen, gradient: 'linear-gradient(135deg, #4facfe, #00f2fe)' },
 ];
 
 async function fetchStats() {
@@ -292,11 +307,7 @@ async function fetchStats() {
   } catch { /* ignore */ }
 }
 
-const moreFilterCount = computed(() => [
-  queryParams.value.module,
-  queryParams.value.assignee,
-  queryParams.value.reporter,
-].filter(Boolean).length);
+const moreFilterCount = computed(() => queryParams.value.versionId ? 1 : 0);
 
 const stepBadgeClass = (status) => {
   if (status === '处理完成') return 'done';
@@ -338,16 +349,27 @@ async function fetchUsers() {
   devUserList.value = all;
 }
 
-async function fetchModules() {
-  const res = await getModuleFlatList();
-  moduleList.value = res.data || [];
+
+
+async function fetchVersions() {
+  try {
+    const res = await getVersionList();
+    versionList.value = res.data?.list || res.data || [];
+  } catch { /* ignore */ }
 }
 
 onMounted(() => {
   fetchStats();
   fetchList();
   fetchUsers();
-  fetchModules();
+  fetchVersions();
+  if (route.query.create) {
+    // 等数据加载完成后自动打开新建弹窗
+    setTimeout(() => {
+      handleAdd();
+      router.replace({ query: {} });
+    }, 300);
+  }
 });
 
 let debounceTimer = null;
@@ -514,76 +536,82 @@ async function confirmAdvance() {
   finally { advanceDialog.loading = false; }
 }
 // ── 推进流程 END ──
+
+function handleExportCSV() {
+  exportToCSV(list.value, [
+    { label: '编号', value: 'ticket_id' },
+    { label: '标题', value: 'title' },
+    { label: '类型', value: 'ticket_type' },
+    { label: '优先级', value: 'priority' },
+    { label: '模块', value: 'module_name' },
+    { label: '版本', value: 'version_name' },
+    { label: '处理人', value: 'assignee_name' },
+    { label: '状态', value: 'status' },
+    { label: '创建时间', value: 'created_at' },
+  ], '线上问题列表');
+}
+
 </script>
 
 <style scoped lang="scss">
 .ticket-view {
-  padding: 20px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
-/* 紧凑统计条 */
-.stats-strip {
-  display: flex;
-  gap: 0;
-  background: var(--bg-card);
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  overflow: hidden;
+/* ── KPI 统计卡片 ── */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px;
 }
 
-.stat-chip {
-  flex: 1;
+.kpi-pill {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border-radius: 12px;
   cursor: pointer;
-  transition: background 0.2s;
-  border-right: 1px solid var(--border-color);
-
-  &:last-child { border-right: none; }
-  &:hover { background: var(--bg-elevated); }
-  &.active { background: var(--el-color-primary-light-9); }
-
-  .chip-label {
-    font-size: 13px;
-    color: var(--text-secondary);
-    white-space: nowrap;
-  }
-
-  .chip-value {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text-primary);
-    min-width: 24px;
-    text-align: center;
-
-    &.primary { color: var(--el-color-primary); }
-    &.warning { color: var(--el-color-warning); }
-    &.danger  { color: var(--el-color-danger); }
-    &.info    { color: var(--text-secondary); }
-  }
-
-  &.active .chip-label { color: var(--el-color-primary); }
+  box-shadow: var(--shadow-card);
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  &:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(0,0,0,0.08); }
+  &.active { box-shadow: 0 0 0 2px var(--el-color-primary), var(--shadow-card); }
+  &.danger.active { box-shadow: 0 0 0 2px var(--el-color-danger), var(--shadow-card); }
 }
 
-/* 主卡片 */
+.kpi-icon {
+  width: 38px; height: 38px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; color: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.15);
+}
+
+.kpi-body { flex: 1; min-width: 0; }
+.kpi-value { display: block; font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1.1; }
+.kpi-label { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; font-weight: 500; }
+
+/* ── 主卡片 ── */
 .main-card {
-  :deep(.el-card__body) { padding: 16px; }
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.02),
+    0 4px 20px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  :deep(.el-card__body) { padding: 20px; }
 }
 
-/* 工具栏 */
+/* ── 工具栏 ── */
 .list-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
 }
 
 .toolbar-left {
@@ -601,7 +629,8 @@ async function confirmAdvance() {
 
 .selected-tip {
   font-size: 13px;
-  color: var(--text-regular);
+  color: var(--el-color-primary);
+  font-weight: 500;
 }
 
 .filter-count {
@@ -615,70 +644,108 @@ async function confirmAdvance() {
   display: inline-block;
 }
 
-/* 表格内容 */
+/* ── 现代表格 ── */
+:deep(.el-table) {
+  --el-table-border-color: transparent;
+  --el-table-header-bg-color: var(--bg-elevated);
+
+  th.el-table__cell {
+    background: var(--bg-elevated);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    font-weight: 650;
+    font-size: 11px;
+    color: var(--text-secondary);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    border-bottom: 2px solid var(--border-light) !important;
+    border-right: none !important;
+    padding: 12px 0;
+  }
+
+  td.el-table__cell {
+    border-bottom: 1px solid var(--border-light) !important;
+    border-right: none !important;
+    padding: 14px 0;
+    vertical-align: middle;
+  }
+
+  .el-table__body tr:hover > td {
+    background: var(--bg-hover) !important;
+  }
+
+  tr:last-child td { border-bottom: none !important; }
+
+  .el-table__cell { border-right: none !important; }
+}
+
+/* ── 表格内容 ── */
 .ticket-id {
   font-size: 12px;
   color: var(--el-color-primary);
-  font-family: monospace;
+  font-family: 'SF Mono', 'Cascadia Code', monospace;
+  font-weight: 600;
 }
 
 .title-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .type-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
+  width: 8px; height: 8px;
+  border-radius: 50%; flex-shrink: 0;
 
-  &.type-问题 { background: var(--el-color-danger); }
-  &.type-需求 { background: var(--el-color-primary); }
-  &.type-咨询 { background: var(--el-color-warning); }
+  &.type-问题 { background: var(--el-color-danger); box-shadow: 0 0 0 3px var(--el-color-danger-light-8); }
+  &.type-需求 { background: var(--el-color-primary); box-shadow: 0 0 0 3px var(--el-color-primary-light-8); }
+  &.type-咨询 { background: var(--el-color-warning); box-shadow: 0 0 0 3px var(--el-color-warning-light-8); }
   &.type-其他 { background: var(--text-secondary); }
 }
 
 .title-text {
   font-size: 14px;
   color: var(--text-primary);
+  font-weight: 500;
 }
 
 .pri-tag {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.2px;
 
   &.pri-p0 { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
   &.pri-p1 { background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
   &.pri-p2 { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
-  &.pri-p3 { background: var(--bg-elevated); color: var(--text-secondary); }
+  &.pri-p3 { background: var(--bg-hover); color: var(--text-secondary); }
 }
 
 .step-badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 10px;
   font-size: 12px;
   white-space: nowrap;
+  font-weight: 550;
 
   &.done    { background: var(--el-color-success-light-9); color: var(--el-color-success); }
   &.progress { background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
   &.review  { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
-  &.pending { background: var(--bg-elevated); color: var(--text-secondary); }
+  &.pending { background: var(--bg-hover); color: var(--text-regular); }
 }
 
 .module-tag {
   display: inline-block;
-  padding: 1px 6px;
-  background: var(--bg-elevated);
-  color: var(--text-regular);
-  border-radius: 3px;
-  font-size: 12px;
+  padding: 2px 8px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .user-cell {
@@ -697,7 +764,7 @@ async function confirmAdvance() {
 }
 
 .empty-text {
-  color: var(--text-secondary);
+  color: var(--text-placeholder);
   font-size: 13px;
 }
 
@@ -706,30 +773,51 @@ async function confirmAdvance() {
   color: var(--text-regular);
 }
 
+/* ── 空状态 ── */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 40px 0;
+  padding: 56px 0;
+}
+.empty-icon-wrap {
+  color: var(--text-placeholder);
+  opacity: .45;
+  margin-bottom: 8px;
+}
+.empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-regular);
+  margin: 0 0 4px;
+}
+.empty-desc {
+  font-size: 13px;
   color: var(--text-secondary);
-
-  p { margin-top: 12px; font-size: 14px; }
+  margin: 0 0 16px;
+}
+.empty-actions {
+  display: flex;
+  gap: 10px;
 }
 
+/* ── 分页 ── */
 .pagination-wrapper {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: 20px;
 }
 
-/* 推进确认对话框 */
+/* ── 推进确认对话框 ── */
 .advance-body {
   .advance-info {
     font-size: 14px;
     color: var(--text-regular);
     line-height: 2;
-
     strong { color: var(--text-primary); }
   }
 }
+
+@media (max-width: 1100px) { .kpi-strip { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 640px) { .kpi-strip { grid-template-columns: repeat(2, 1fr); } }
 </style>

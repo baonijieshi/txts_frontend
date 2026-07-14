@@ -58,7 +58,7 @@
     </div>
 
     <!-- 头像上传对话框 -->
-    <el-dialog v-model="avatarDialogVisible" title="修改头像" width="400px" :close-on-click-modal="false">
+    <el-dialog v-model="avatarDialogVisible" title="修改头像" width="400px" :close-on-click-modal="false" append-to-body>
       <div class="avatar-upload-area">
         <el-avatar :size="80" :src="previewUrl || avatar || ''">{{ userName ? userName.charAt(0) : '' }}</el-avatar>
         <el-upload
@@ -81,7 +81,7 @@
     </el-dialog>
 
     <!-- 修改密码对话框 -->
-    <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px" :close-on-click-modal="false" @closed="resetPasswordForm">
+    <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px" :close-on-click-modal="false" append-to-body @closed="resetPasswordForm">
       <el-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-width="80px">
         <el-form-item label="旧密码" prop="oldPassword">
           <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="请输入旧密码" />

@@ -7,7 +7,10 @@
     @keydown.escape="emit('update:visible', false)"
   >
     <div class="panel-header">
-      <span class="panel-title">通知</span>
+      <div class="panel-header-left">
+        <span class="panel-title">通知</span>
+        <span v-if="unreadCount" class="panel-badge">{{ unreadCount }}</span>
+      </div>
       <div class="panel-actions">
         <el-button
           type="primary"
@@ -23,14 +26,14 @@
           :disabled="notifications.length === 0"
           @click="handleClearAll"
         >
-          <el-icon><Delete /></el-icon>清空全部
+          <el-icon><Delete /></el-icon>清空
         </el-button>
       </div>
     </div>
 
     <div class="panel-body">
       <div v-if="loading && page === 1" class="panel-loading">
-        <el-icon class="is-loading"><Loading /></el-icon>
+        <el-icon class="is-loading" :size="24"><Loading /></el-icon>
       </div>
 
       <el-empty
@@ -40,36 +43,60 @@
       />
 
       <template v-else>
+        <!-- 按类型分组 -->
         <div
-          v-for="item in notifications"
-          :key="item.id"
-          class="notification-card"
-          :class="{ unread: !item.is_read }"
-          @click="handleCardClick(item)"
+          v-for="group in groupedNotifications"
+          :key="group.type"
+          class="notif-group"
         >
-          <div class="card-icon">
-            <el-icon :size="18">
-              <component :is="getTypeIcon(item.notification_type)" />
-            </el-icon>
-          </div>
-          <div class="card-content">
-            <div class="card-header">
-              <el-avatar :size="24" :src="item.sender_avatar || ''">
-                {{ item.sender_name ? item.sender_name.charAt(0) : '' }}
-              </el-avatar>
-              <span class="sender-name">{{ item.sender_name || '系统' }}</span>
-              <span class="card-time">{{ timeAgo(item.created_at) }}</span>
+          <div class="group-header">
+            <div class="group-header-left">
+              <el-icon :size="15" class="group-icon"><component :is="getTypeIcon(group.type)" /></el-icon>
+              <span class="group-label">{{ groupLabel(group.type) }}</span>
+              <span class="group-count">{{ group.items.length }}</span>
             </div>
-            <div class="card-title">{{ item.title }}</div>
-            <div class="card-summary">{{ truncateContent(item.content) }}</div>
+            <el-button v-if="group.unreadCount > 0" text size="small" class="group-mark-read" @click="markGroupRead(group)">
+              已读
+            </el-button>
           </div>
-          <button
-            class="card-delete-btn"
-            title="删除此通知"
-            @click.stop="handleDeleteOne(item)"
+
+          <div
+            v-for="item in group.items"
+            :key="item.id"
+            class="notification-card"
+            :class="{ unread: !item.is_read }"
+            :style="{ '--type-color': typeColor(group.type) }"
           >
-            <el-icon :size="14"><Close /></el-icon>
-          </button>
+            <div class="card-indicator" :class="{ active: !item.is_read }" />
+
+            <div class="card-body" @click="handleCardClick(item)">
+              <div class="card-top">
+                <span class="card-sender">{{ item.sender_name || '系统' }}</span>
+                <span class="card-time">{{ timeAgo(item.created_at) }}</span>
+              </div>
+              <div class="card-title">{{ item.title }}</div>
+              <div class="card-summary">{{ truncateContent(item.content) }}</div>
+            </div>
+
+            <div class="card-actions">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                @click.stop="handleActionClick(item)"
+              >
+                {{ actionLabel(item) }}
+              </el-button>
+              <el-button
+                v-if="!item.is_read"
+                size="small"
+                text
+                @click.stop="handleMarkOne(item)"
+              >
+                已读
+              </el-button>
+            </div>
+          </div>
         </div>
       </template>
     </div>
@@ -92,6 +119,7 @@ import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 import {
   ChatDotRound, Warning, Tickets, Loading, Delete, Stamp, Check, Close,
+  Aim, FolderOpened,
 } from '@element-plus/icons-vue';
 import { getNotificationList } from '@/api/notification';
 
@@ -116,9 +144,10 @@ const pageSize = 10;
 const total = ref(0);
 const hasMore = ref(false);
 
+const unreadCount = computed(() => store.getters.unreadCount || 0);
 const hasUnread = computed(() => notifications.value.some((n) => !n.is_read));
 
-// Icon mapping
+// ── 通知类型映射 ──
 const iconMap = {
   comment_reply: markRaw(ChatDotRound),
   bug_assigned: markRaw(Warning),
@@ -126,30 +155,96 @@ const iconMap = {
   bug_activated: markRaw(Warning),
   ticket_assigned: markRaw(Tickets),
   story_review: markRaw(Stamp),
+  okr_review: markRaw(Aim),
+  acceptance_submitted: markRaw(FolderOpened),
+  acceptance_rejected: markRaw(FolderOpened),
+  test_submitted: markRaw(FolderOpened),
+  test_rejected: markRaw(FolderOpened),
 };
 
 function getTypeIcon(type) {
   return iconMap[type] || markRaw(ChatDotRound);
 }
 
-// Content truncation (Property 8)
+const typeLabels = {
+  bug_assigned: 'Bug 指派',
+  bug_resolved: 'Bug 解决',
+  bug_activated: 'Bug 激活',
+  ticket_assigned: '线上问题指派',
+  story_review: '需求审核',
+  okr_review: 'OKR 审核',
+  comment_reply: '评论回复',
+  acceptance_submitted: '验收提交',
+  acceptance_rejected: '验收驳回',
+  test_submitted: '提测通知',
+  test_rejected: '测试驳回',
+};
+
+function groupLabel(type) {
+  return typeLabels[type] || type;
+}
+
+const typeColors = {
+  bug: 'var(--el-color-danger)',
+  ticket: 'var(--el-color-warning)',
+  story: 'var(--el-color-primary)',
+  okr: 'var(--el-color-success)',
+  version: 'var(--el-color-info)',
+  test: 'var(--el-color-warning)',
+};
+
+function typeColor(type) {
+  const prefix = type.split('_')[0];
+  return typeColors[prefix] || 'var(--el-color-primary)';
+}
+
+// ── Action 配置 ──
+const actionConfig = {
+  bug_assigned: { label: '去处理', navigate: (item) => ({ path: '/test/bug', query: { openId: item.source_id } }) },
+  bug_resolved: { label: '查看', navigate: (item) => ({ path: '/test/bug', query: { openId: item.source_id } }) },
+  bug_activated: { label: '查看', navigate: (item) => ({ path: '/test/bug', query: { openId: item.source_id } }) },
+  ticket_assigned: { label: '去处理', navigate: (item) => ({ path: '/delivery/ticket', query: { openId: item.source_id } }) },
+  story_review: { label: '去评审', navigate: (item) => ({ path: '/story', query: { openId: item.source_id } }) },
+  okr_review: { label: '查看', navigate: () => ({ path: '/okr' }) },
+  comment_reply: { label: '查看', navigate: (item) => ({ path: '/story', query: { openId: item.source_id } }) },
+  acceptance_submitted: { label: '去验收', navigate: (item) => ({ path: '/project/versions', query: { openId: item.source_id } }) },
+  acceptance_rejected: { label: '查看', navigate: (item) => ({ path: '/project/versions', query: { openId: item.source_id } }) },
+  test_submitted: { label: '查看', navigate: (item) => ({ path: '/project/versions', query: { openId: item.source_id } }) },
+  test_rejected: { label: '查看', navigate: (item) => ({ path: '/project/versions', query: { openId: item.source_id } }) },
+};
+
+function actionLabel(item) {
+  return actionConfig[item.notification_type]?.label || '查看';
+}
+
+// ── 按类型分组 ──
+const groupedNotifications = computed(() => {
+  const groups = {};
+  notifications.value.forEach((item) => {
+    const type = item.notification_type;
+    if (!groups[type]) groups[type] = { type, items: [], unreadCount: 0 };
+    groups[type].items.push(item);
+    if (!item.is_read) groups[type].unreadCount++;
+  });
+  // 排序：未读多的组在前
+  return Object.values(groups).sort((a, b) => b.unreadCount - a.unreadCount);
+});
+
+// ── 工具函数 ──
 function truncateContent(content) {
   if (!content) return '';
   if (content.length > 80) return content.slice(0, 80) + '...';
   return content;
 }
 
-// Relative time helper
 function timeAgo(dateStr) {
   if (!dateStr) return '';
   const now = Date.now();
   const date = new Date(dateStr).getTime();
   const diff = now - date;
-
   const minutes = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
   const days = Math.floor(diff / 86400000);
-
   if (minutes < 1) return '刚刚';
   if (minutes < 60) return `${minutes}分钟前`;
   if (hours < 24) return `${hours}小时前`;
@@ -157,15 +252,63 @@ function timeAgo(dateStr) {
   return dateStr.slice(0, 10);
 }
 
-// Route mapping (Property 10)
+// ── 导航 ──
 const routeMap = {
   story: (id) => ({ path: '/story', query: { openId: id } }),
   bug: (id) => ({ path: '/test/bug', query: { openId: id } }),
   ticket: (id) => ({ path: '/delivery/ticket', query: { openId: id } }),
   okr: () => ({ path: '/okr' }),
+  version: (id) => ({ path: '/project/versions', query: { openId: id } }),
 };
 
-// Load notifications when panel becomes visible
+function navigateTo(item) {
+  const routeFn = routeMap[item.source_type];
+  if (routeFn) {
+    router.push(routeFn(item.source_id)).catch(() => {});
+    emit('update:visible', false);
+  }
+}
+
+// ── 交互事件 ──
+async function handleCardClick(item) {
+  try {
+    if (!item.is_read) {
+      await store.dispatch('notification/markRead', item.id);
+      item.is_read = true;
+    }
+  } catch { /* ignore */ }
+  navigateTo(item);
+}
+
+async function handleActionClick(item) {
+  try {
+    if (!item.is_read) {
+      await store.dispatch('notification/markRead', item.id);
+      item.is_read = true;
+    }
+  } catch { /* ignore */ }
+  navigateTo(item);
+}
+
+async function handleMarkOne(item) {
+  try {
+    await store.dispatch('notification/markRead', item.id);
+    item.is_read = true;
+  } catch { /* ignore */ }
+}
+
+function markGroupRead(group) {
+  group.items.forEach(async (item) => {
+    if (!item.is_read) {
+      try {
+        await store.dispatch('notification/markRead', item.id);
+        item.is_read = true;
+      } catch { /* ignore */ }
+    }
+  });
+}
+
+// ── 数据获取 ──
 async function fetchNotifications() {
   loading.value = true;
   page.value = 1;
@@ -182,7 +325,6 @@ async function fetchNotifications() {
   }
 }
 
-// Load more (pagination)
 async function loadMore() {
   if (loadingMore.value) return;
   loadingMore.value = true;
@@ -193,84 +335,46 @@ async function loadMore() {
     notifications.value.push(...newList);
     page.value = nextPage;
     hasMore.value = notifications.value.length < (res.data.total || 0);
-  } catch {
-    // 静默忽略
-  } finally {
+  } catch { /* silent */ } finally {
     loadingMore.value = false;
   }
 }
 
-// Card click: mark read + navigate
-async function handleCardClick(item) {
-  try {
-    if (!item.is_read) {
-      await store.dispatch('notification/markRead', item.id);
-      item.is_read = true;
-    }
-  } catch {
-    // markRead 失败不阻塞导航
-  }
-
-  const routeFn = routeMap[item.source_type];
-  if (routeFn) {
-    router.push(routeFn(item.source_id)).catch(() => {
-      // 路由跳转失败，静默忽略
-    });
-  }
-
-  emit('update:visible', false);
-}
-
-// Mark all as read
+// ── 批量操作 ──
 async function handleMarkAllRead() {
   try {
     await store.dispatch('notification/markAllRead');
     notifications.value.forEach((n) => { n.is_read = true; });
-  } catch {
-    // 错误消息由全局拦截器统一处理
-  }
+  } catch { /* silent */ }
 }
 
-// Clear all notifications
 async function handleClearAll() {
   try {
     await ElMessageBox.confirm(
       '清空后所有通知将从列表中移除，确定继续吗？',
       '清空全部通知',
-      {
-        confirmButtonText: '确定清空',
-        cancelButtonText: '取消',
-        type: 'warning',
-      },
+      { confirmButtonText: '确定清空', cancelButtonText: '取消', type: 'warning' },
     );
     await store.dispatch('notification/clearAll');
     notifications.value = [];
     hasMore.value = false;
     total.value = 0;
-  } catch {
-    // 用户取消或请求失败
-  }
+  } catch { /* user cancelled */ }
 }
 
-// Delete single notification
 async function handleDeleteOne(item) {
   try {
     await store.dispatch('notification/deleteOne', item.id);
     const idx = notifications.value.findIndex((n) => n.id === item.id);
-    if (idx !== -1) {
-      notifications.value.splice(idx, 1);
-    }
+    if (idx !== -1) notifications.value.splice(idx, 1);
     total.value = Math.max(0, total.value - 1);
     hasMore.value = notifications.value.length < total.value;
-  } catch {
-    // 错误由全局拦截器处理
-  }
+  } catch { /* silent */ }
 }
 
-// Click outside detection
+// ── 点击外部关闭 ──
 function onDocumentClick(e) {
   if (panelRef.value && !panelRef.value.contains(e.target)) {
-    // Check if click is on the bell (parent handles toggle)
     const bell = document.querySelector('.notification-bell');
     if (bell && bell.contains(e.target)) return;
     emit('update:visible', false);
@@ -282,9 +386,7 @@ watch(
   (val) => {
     if (val) {
       fetchNotifications();
-      nextTick(() => {
-        panelRef.value?.focus();
-      });
+      nextTick(() => { panelRef.value?.focus(); });
     }
   },
 );
@@ -303,10 +405,10 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 50px;
   right: 0;
-  width: 380px;
-  max-height: 480px;
+  width: 400px;
+  max-height: 520px;
   background: var(--bg-card);
-  border-radius: 8px;
+  border-radius: 14px;
   box-shadow: var(--shadow-dropdown);
   z-index: 2000;
   display: flex;
@@ -320,27 +422,47 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
+}
 
-  .panel-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
+.panel-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
-  .panel-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
+.panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.panel-badge {
+  min-width: 20px;
+  height: 20px;
+  line-height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-inverse);
+  background: var(--el-color-danger);
+  border-radius: 10px;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .panel-body {
-  max-height: 400px;
   overflow-y: auto;
   flex: 1;
+  &::-webkit-scrollbar { width: 5px; }
+  &::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
 }
 
 .panel-loading {
@@ -355,131 +477,140 @@ onBeforeUnmount(() => {
   padding: 40px 0;
 }
 
+/* ── 分组 ── */
+.notif-group {
+  &:not(:last-child) { border-bottom: 1px solid var(--border-light); }
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px 6px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  z-index: 1;
+}
+
+.group-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-icon {
+  color: var(--text-secondary);
+}
+
+.group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.group-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 0 6px;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  line-height: 18px;
+}
+
+.group-mark-read {
+  font-size: 11px;
+  color: var(--text-secondary);
+  &:hover { color: var(--el-color-primary); }
+}
+
+/* ── 通知卡片 ── */
 .notification-card {
   display: flex;
-  padding: 12px 16px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-  border-bottom: 1px solid var(--border-light);
+  align-items: flex-start;
+  padding: 10px 18px 10px 16px;
+  gap: 10px;
   position: relative;
+  transition: background 0.15s;
 
-  &:hover {
-    background-color: var(--bg-hover);
+  &:hover { background: var(--bg-hover); }
+}
+
+.card-indicator {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  background: transparent;
+  transition: background 0.2s;
+
+  &.active {
+    background: var(--type-color, var(--el-color-primary));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--type-color, var(--el-color-primary)) 20%, transparent);
   }
+}
 
-  &:last-child {
-    border-bottom: none;
-  }
+.card-body {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
 
-  &.unread {
-    background-color: var(--color-primary-light, #ecf5ff);
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
 
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 4px;
-      background-color: var(--color-primary);
-      border-radius: 0 2px 2px 0;
-      transition: opacity 0.3s ease;
-    }
-  }
+.card-sender {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
 
-  &:not(.unread)::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 4px;
-    background-color: transparent;
-    border-radius: 0 2px 2px 0;
-    transition: opacity 0.3s ease;
-    opacity: 0;
-  }
+.card-time {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  flex-shrink: 0;
+}
 
-  .card-icon {
-    flex-shrink: 0;
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    background-color: var(--bg-elevated);
-    margin-right: 10px;
-    margin-top: 2px;
-    color: var(--text-regular);
-  }
+.card-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-  .card-content {
-    flex: 1;
-    min-width: 0;
+.card-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
-    .card-header {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 4px;
+/* ── 操作区 ── */
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding-top: 2px;
 
-      .sender-name {
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--text-primary);
-      }
-
-      .card-time {
-        margin-left: auto;
-        font-size: 12px;
-        color: var(--text-secondary);
-        white-space: nowrap;
-      }
-    }
-
-    .card-title {
-      font-size: 13px;
-      color: var(--text-primary);
-      margin-bottom: 2px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .card-summary {
-      font-size: 12px;
-      color: var(--text-secondary);
-      line-height: 1.4;
-      word-break: break-all;
-    }
-  }
-
-  .card-delete-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: var(--bg-hover);
-    border-radius: 50%;
-    cursor: pointer;
-    color: var(--text-secondary);
-    opacity: 0;
-    transition: opacity 0.2s, background-color 0.2s;
-
-    &:hover {
-      background: var(--el-color-danger-light-9);
-      color: var(--el-color-danger);
-    }
-  }
-
-  &:hover .card-delete-btn {
-    opacity: 1;
+  .el-button {
+    font-size: 11px;
+    padding: 3px 8px;
+    height: auto;
+    min-height: 0;
+    border-radius: 6px;
   }
 }
 
@@ -487,8 +618,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 16px;
-  border-top: 1px solid var(--border-color);
+  padding: 10px 18px;
+  border-top: 1px solid var(--border-light);
   flex-shrink: 0;
 }
 </style>

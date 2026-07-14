@@ -47,14 +47,30 @@
         </el-row>
       </div>
       <el-form-item label="描述">
-        <div class="editor-wrapper">
-          <Toolbar :editor="editorRef" :default-config="toolbarConfig" :mode="mode" />
-          <Editor
-            v-model="form.description"
-            :default-config="editorConfig"
-            class="editor-body"
-            @on-created="onEditorCreated"
-          />
+        <div style="width:100%">
+          <div v-if="ai.isAvailable.value" class="editor-header">
+            <div class="editor-header-right">
+              <el-button
+                size="small"
+                text
+                type="primary"
+                :loading="ai.isProcessing.value"
+                @click="handleAiGenerateDesc"
+              >
+                <el-icon :size="14"><MagicStick /></el-icon>
+                AI 生成描述
+              </el-button>
+            </div>
+          </div>
+          <div class="editor-wrapper">
+            <Toolbar :editor="editorRef" :default-config="toolbarConfig" :mode="mode" />
+            <Editor
+              v-model="form.description"
+              :default-config="editorConfig"
+              class="editor-body"
+              @on-created="onEditorCreated"
+            />
+          </div>
         </div>
       </el-form-item>
     </el-form>
@@ -71,10 +87,12 @@ import {
   ref, watch, shallowRef, onBeforeUnmount, computed,
 } from 'vue';
 import { ElMessage } from 'element-plus';
+import { MagicStick } from '@element-plus/icons-vue'
 import { Editor, Toolbar } from '@wangeditor/editor-for-vue';
-import { Transforms, Editor as SlateEditor, Range } from 'slate';
 import { createStory, updateStory } from '@/api/story';
 import request from '@/utils/request';
+import { useAi } from '@/composables/useAi'
+import { markdownToHtml } from '@/utils/markdown';
 import ModernSelect from '@/components/ModernSelect.vue';
 import UserCascader from '@/components/UserCascader.vue';
 
@@ -88,6 +106,7 @@ const props = defineProps({
 
 const emit = defineEmits(['update:visible', 'saved']);
 
+const ai = useAi();
 const formRef = ref(null);
 const title = ref('新建需求');
 const editorRef = shallowRef(null);
@@ -140,80 +159,6 @@ const editorConfig = {
 
 const onEditorCreated = (editor) => {
   editorRef.value = editor;
-
-  // 手动 Markdown 快捷键
-  const mdPatterns: Record<string, string> = {
-    '#': 'header1', '##': 'header2', '###': 'header3',
-    '####': 'header4', '#####': 'header5',
-    '-': 'bulleted-list', '*': 'bulleted-list', '+': 'bulleted-list',
-    '>': 'blockquote', '1.': 'numbered-list',
-  };
-
-  const originalInsertText = editor.insertText.bind(editor);
-  const originalInsertBreak = editor.insertBreak.bind(editor);
-
-  editor.insertText = (text: string) => {
-    if (text !== ' ') return originalInsertText(text);
-
-    const { selection } = editor;
-    if (!selection || !Range.isCollapsed(selection)) return originalInsertText(text);
-
-    try {
-      const block = SlateEditor.above(editor, {
-        match: (n) => SlateEditor.isBlock(editor, n),
-      });
-      if (!block) return originalInsertText(text);
-
-      const [node, path] = block;
-      const blockText = SlateEditor.string(editor, path);
-      const pattern = Object.keys(mdPatterns).find((p) => blockText === p);
-      if (!pattern) return originalInsertText(text);
-
-      // 匹配到 markdown 模式：删除文本 → 切换块类型
-      Transforms.delete(editor, { at: { anchor: SlateEditor.start(editor, path), focus: selection.anchor } });
-
-      const type = mdPatterns[pattern];
-      if (type === 'bulleted-list' || type === 'numbered-list') {
-        const listType = type === 'bulleted-list' ? 'bulleted-list' : 'numbered-list';
-        Transforms.setNodes(editor, { type: 'list-item' } as any, { match: (n) => SlateEditor.isBlock(editor, n) });
-        Transforms.wrapNodes(editor, { type: listType, children: [] } as any, {
-          match: (n) => (n as any).type === 'list-item',
-        });
-      } else {
-        Transforms.setNodes(editor, { type } as any, {
-          match: (n) => SlateEditor.isBlock(editor, n),
-        });
-      }
-      return;
-    } catch {
-      originalInsertText(text);
-    }
-  };
-
-  editor.insertBreak = () => {
-    const { selection } = editor;
-    if (!selection || !Range.isCollapsed(selection)) return originalInsertBreak();
-
-    try {
-      const block = SlateEditor.above(editor, {
-        match: (n) => SlateEditor.isBlock(editor, n),
-      });
-      if (!block) return originalInsertBreak();
-
-      const [, path] = block;
-      const blockText = SlateEditor.string(editor, path);
-
-      if (blockText === '---' || blockText === '***') {
-        Transforms.delete(editor, { at: { anchor: SlateEditor.start(editor, path), focus: SlateEditor.end(editor, path) } });
-        Transforms.setNodes(editor, { type: 'paragraph' } as any, { match: (n) => SlateEditor.isBlock(editor, n) });
-        Transforms.insertNodes(editor, { type: 'divider', children: [{ text: '' }] } as any);
-        Transforms.insertNodes(editor, { type: 'paragraph', children: [{ text: '' }] } as any);
-        return;
-      }
-    } catch { /* fall through */ }
-
-    originalInsertBreak();
-  };
 };
 
 onBeforeUnmount(() => {
@@ -271,6 +216,41 @@ const handleSubmit = async () => {
     // 校验失败或请求失败
   }
 };
+
+// ── AI 生成需求描述 ──
+const handleAiGenerateDesc = async () => {
+  if (!form.value.title) {
+    ElMessage.warning('请先填写需求标题');
+    return;
+  }
+  const prompt = [
+    '你是一个专业的产品经理。请根据以下需求信息，用 Markdown 格式生成一段结构化的需求描述。',
+    '',
+    `需求标题：${form.value.title}`,
+    `优先级：${form.value.priority}`,
+    '',
+    '请严格按以下 Markdown 格式输出：',
+    '## 背景与目标',
+    '（描述需求的背景、用户痛点、期望达到的目标）',
+    '',
+    '## 功能描述',
+    '- 核心功能点1',
+    '- 核心功能点2',
+    '- 核心功能点3',
+    '',
+    '## 验收标准',
+    '1. 验收标准1',
+    '2. 验收标准2',
+    '3. 验收标准3',
+  ].join('\n');
+  try {
+    const result = await ai.complete(prompt);
+    form.value.description = markdownToHtml(result);
+    ElMessage.success('描述已生成');
+  } catch (e: any) {
+    ElMessage.error(e.message || 'AI 生成失败');
+  }
+};
 </script>
 
 <style src="@wangeditor/editor/dist/css/style.css" />
@@ -299,6 +279,20 @@ const handleSubmit = async () => {
     color: var(--text-regular);
     padding-bottom: 4px;
   }
+}
+
+// 编辑器头部（AI 按钮）
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.editor-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 // 编辑器包装器

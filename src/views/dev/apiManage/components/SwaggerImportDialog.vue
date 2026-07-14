@@ -50,6 +50,24 @@
           <el-icon><CircleCheck /></el-icon>
           <span>解析成功，共检测到 <strong>{{ parsedApis.length }}</strong> 个接口</span>
         </div>
+        <!-- 服务选择 -->
+        <div class="service-select-row">
+          <span class="service-select-label">导入到服务：</span>
+          <el-select
+            v-model="selectedServiceId"
+            placeholder="选择服务（可选）"
+            clearable
+            size="small"
+            style="width: 240px"
+          >
+            <el-option
+              v-for="svc in serviceList"
+              :key="svc.id"
+              :label="`${svc.name}（${svc.api_count} 个接口）`"
+              :value="svc.id"
+            />
+          </el-select>
+        </div>
         <el-table :data="previewList" size="small" max-height="280" class="preview-table">
           <el-table-column label="接口名称" prop="name" min-width="140" show-overflow-tooltip />
           <el-table-column label="路径" prop="path" min-width="160" show-overflow-tooltip />
@@ -93,6 +111,7 @@ const props = defineProps({
   visible: { type: Boolean, default: false },
   // 父组件通过此 prop 驱动进度条（0-100），-1 表示不显示
   importProgress: { type: Number, default: -1 },
+  serviceList: { type: Array, default: () => [] },
 });
 const emit = defineEmits(['update:visible', 'import-confirm']);
 
@@ -100,6 +119,7 @@ const fileInputRef = ref(null);
 const isDragging = ref(false);
 const parseError = ref('');
 const parsedApis = ref(null);
+const selectedServiceId = ref(null);
 
 // 是否正在导入：由父组件的 importProgress >= 0 驱动
 const importing = computed(() => props.importProgress >= 0);
@@ -121,6 +141,7 @@ watch(() => props.visible, (val) => {
   if (!val) {
     parsedApis.value = null;
     parseError.value = '';
+    selectedServiceId.value = null;
   }
 });
 
@@ -159,48 +180,186 @@ function parseFile(file) {
       return;
     }
 
-    parsedApis.value = extractApis(json.paths);
+    const schemas = json.components?.schemas || {};
+    parsedApis.value = extractApis(json.paths, schemas);
   };
   reader.readAsText(file);
 }
 
-function schemaToFields(schema) {
-  if (!schema || typeof schema !== 'object') return [];
-  const props = schema.properties || {};
-  const required = Array.isArray(schema.required) ? schema.required : [];
-  return Object.entries(props).map(([k, v]) => ({
-    key: k,
-    type: v.type || 'string',
-    required: required.includes(k),
-    description: v.title || v.description || '',
-  }));
+// 解析 $ref 引用：从 "#/components/schemas/UserForm" 提取 "UserForm" 并查找 schema
+function resolveRef(ref, schemas) {
+  if (!ref || typeof ref !== 'string') return null;
+  const prefix = '#/components/schemas/';
+  if (!ref.startsWith(prefix)) return null;
+  const name = ref.slice(prefix.length);
+  return schemas[name] || null;
 }
 
-function extractApis(paths) {
+// 递归解析 schema（处理嵌套 $ref）
+function resolveSchema(schema, schemas, depth = 0) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (depth > 10) return schema; // 防止循环引用
+  if (schema.$ref) {
+    const resolved = resolveRef(schema.$ref, schemas);
+    if (resolved) return resolveSchema(resolved, schemas, depth + 1);
+    return schema;
+  }
+  // 递归解析嵌套属性中的 $ref（如 items.$ref、allOf 等）
+  if (schema.properties) {
+    const resolvedProps = {};
+    Object.entries(schema.properties).forEach(([key, val]) => {
+      resolvedProps[key] = resolveSchema(val, schemas, depth + 1);
+    });
+    return { ...schema, properties: resolvedProps };
+  }
+  if (schema.items) {
+    return { ...schema, items: resolveSchema(schema.items, schemas, depth + 1) };
+  }
+  if (schema.allOf) {
+    return resolveAllOf(schema, schemas, depth);
+  }
+  return schema;
+}
+
+// 解析 allOf（合并多个 schema）
+function resolveAllOf(schema, schemas, depth) {
+  if (!Array.isArray(schema.allOf)) return schema;
+  const merged = { type: 'object', properties: {}, required: [] };
+  schema.allOf.forEach((sub) => {
+    const resolved = resolveSchema(sub, schemas, depth + 1);
+    if (resolved) {
+      if (resolved.properties) Object.assign(merged.properties, resolved.properties);
+      if (resolved.required) merged.required = [...new Set([...merged.required, ...resolved.required])];
+    }
+  });
+  return merged;
+}
+
+// 将 schema 转换为字段列表（用于 JSON body 和响应参数）
+function schemaToFields(schema, schemas) {
+  if (!schema || typeof schema !== 'object') return [];
+  const resolved = resolveSchema(schema, schemas);
+  if (!resolved) return [];
+  const props = resolved.properties || {};
+  const required = Array.isArray(resolved.required) ? resolved.required : [];
+  return Object.entries(props).map(([k, v]) => {
+    // 解析字段类型：如果是数组且有 items，显示为 "array<string>" 等
+    let type = v.type || 'string';
+    if (type === 'array' && v.items) {
+      const itemType = v.items.type || 'string';
+      type = `array<${itemType}>`;
+    } else if (type === 'array' && v.items?.$ref) {
+      type = 'array<object>';
+    } else if (v.$ref && !v.type) {
+      type = 'object';
+    }
+    return {
+      key: k,
+      type,
+      required: required.includes(k),
+      description: v.title || v.description || '',
+    };
+  });
+}
+
+// 解析响应数据：收集所有状态码的结构化响应信息
+function extractResponseData(responses, schemas) {
+  if (!responses || typeof responses !== 'object') return {};
+  const data = {};
+  Object.entries(responses).forEach(([statusCode, resp]) => {
+    const entry = { description: resp.description || '', contentType: '', fields: [] };
+    // 优先匹配 application/json，其次 */*
+    const jsonContent = resp?.content?.['application/json']?.schema;
+    const anyContent = resp?.content?.['*/*']?.schema;
+    // OpenAPI 2.0 兼容：resp.schema
+    const legacySchema = resp?.schema;
+    const schema = jsonContent || anyContent || legacySchema;
+    if (schema) {
+      if (jsonContent) entry.contentType = 'application/json';
+      else if (anyContent) entry.contentType = '*/*';
+      entry.fields = schemaToFields(schema, schemas);
+    }
+    data[statusCode] = entry;
+  });
+  return data;
+}
+
+function extractApis(paths, schemas) {
   const VALID_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'];
   const result = [];
   Object.entries(paths).forEach(([path, methods]) => {
+    // 从 URL 路径中提取 {xxx} 占位符
+    const urlPathParams = (path.match(/\{([^}]+)\}/g) || []).map((p) => p.slice(1, -1));
+
+    // 收集同路径下所有 method 中定义的 path 参数作为补充查找表
+    const siblingPathParams = {};
+    Object.values(methods).forEach((op) => {
+      (op?.parameters || []).forEach((p) => {
+        if (p.in === 'path' && p.name) {
+          siblingPathParams[p.name] = p;
+        }
+      });
+    });
+
     Object.entries(methods).forEach(([method, operation]) => {
       if (!VALID_METHODS.includes(method.toLowerCase())) return;
 
-      const parameters = { query: [], header: [], body: { type: 'json', content: '' } };
+      const parameters = { query: [], header: [], path: [], body: { type: 'json', content: '' } };
+
+      // 解析 operation 级别的 parameters（path / query / header）
       const rawParams = operation?.parameters || [];
+      const explicitPathKeys = new Set();
       rawParams.forEach((p) => {
-        const item = { key: p.name || '', value: p.default ?? '', description: p.description || '' };
+        const item = {
+          key: p.name || '',
+          value: p.example ?? p.default ?? '',
+          type: p.schema?.type || 'string',
+          description: p.description || '',
+          required: p.required || false,
+        };
         if (p.in === 'query') parameters.query.push(item);
         else if (p.in === 'header') parameters.header.push(item);
-        else if (p.in === 'body') {
-          parameters.body = { type: 'json', content: schemaToFields(p.schema || {}) };
+        else if (p.in === 'path') {
+          parameters.path.push(item);
+          explicitPathKeys.add(p.name);
+        } else if (p.in === 'body') {
+          parameters.body = { type: 'json', content: schemaToFields(p.schema || {}, schemas) };
         }
       });
+
+      // 自动补全 URL 中 {xxx} 占位符：从同路径 sibling 查找定义，否则默认 string/required
+      urlPathParams.forEach((paramName) => {
+        if (explicitPathKeys.has(paramName)) return; // 已显式声明则跳过
+        const sibling = siblingPathParams[paramName];
+        parameters.path.push({
+          key: paramName,
+          value: sibling?.example ?? sibling?.default ?? '',
+          type: sibling?.schema?.type || 'string',
+          description: sibling?.description || '',
+          required: true, // URL 路径参数默认必填
+        });
+      });
+
+      // 解析 requestBody（OpenAPI 3.0）
       const requestBody = operation?.requestBody;
       if (requestBody) {
         const jsonContent = requestBody?.content?.['application/json']?.schema;
         const formContent = requestBody?.content?.['application/x-www-form-urlencoded']?.schema;
+        const multipartContent = requestBody?.content?.['multipart/form-data']?.schema;
         if (jsonContent) {
-          parameters.body = { type: 'json', content: schemaToFields(jsonContent) };
+          parameters.body = { type: 'json', content: schemaToFields(jsonContent, schemas) };
         } else if (formContent) {
-          const props2 = formContent.properties || {};
+          const resolved = resolveSchema(formContent, schemas);
+          const props2 = resolved?.properties || {};
+          parameters.body = {
+            type: 'form-data',
+            content: Object.entries(props2).map(([k, v]) => ({
+              key: k, value: '', description: v.description || '',
+            })),
+          };
+        } else if (multipartContent) {
+          const resolved = resolveSchema(multipartContent, schemas);
+          const props2 = resolved?.properties || {};
           parameters.body = {
             type: 'form-data',
             content: Object.entries(props2).map(([k, v]) => ({
@@ -210,19 +369,27 @@ function extractApis(paths) {
         }
       }
 
+      // 解析响应：200 响应体作为 response_example（带解析），所有状态码存入 response_data
       let responseExample = '';
       const responses = operation?.responses || {};
       const resp200 = responses['200'] || responses[200];
       if (resp200) {
-        const schema3 = resp200?.content?.['application/json']?.schema;
-        const schema2 = resp200?.schema;
-        const schema = schema3 || schema2;
+        const jsonSchema = resp200?.content?.['application/json']?.schema;
+        const anySchema = resp200?.content?.['*/*']?.schema;
+        const legacySchema = resp200?.schema;
+        const schema = jsonSchema || anySchema || legacySchema;
         if (schema) {
-          responseExample = JSON.stringify(schema, null, 2);
+          const resolved = resolveSchema(schema, schemas);
+          if (resolved) {
+            responseExample = JSON.stringify(resolved, null, 2);
+          }
         } else if (resp200.description) {
           responseExample = resp200.description;
         }
       }
+
+      // 响应数据（所有状态码的结构化信息）
+      const responseData = extractResponseData(responses, schemas);
 
       result.push({
         name: operation?.summary || operation?.operationId || `${method.toUpperCase()} ${path}`,
@@ -231,6 +398,7 @@ function extractApis(paths) {
         description: operation?.description || '',
         parameters,
         response_example: responseExample,
+        response_data: responseData,
       });
     });
   });
@@ -240,6 +408,7 @@ function extractApis(paths) {
 function resetParse() {
   parsedApis.value = null;
   parseError.value = '';
+  selectedServiceId.value = null;
 }
 
 function handleCancel() {
@@ -248,8 +417,8 @@ function handleCancel() {
 
 function handleConfirm() {
   if (!parsedApis.value) return;
-  // 把解析结果交给父组件，由父组件全权控制导入流程和关闭时机
-  emit('import-confirm', parsedApis.value);
+  // 把解析结果和服务 ID 交给父组件
+  emit('import-confirm', { apis: parsedApis.value, serviceId: selectedServiceId.value });
 }
 </script>
 
@@ -330,6 +499,20 @@ function handleConfirm() {
 
     .el-icon {
       font-size: 18px;
+    }
+  }
+
+  .service-select-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+
+    .service-select-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-regular);
+      white-space: nowrap;
     }
   }
 

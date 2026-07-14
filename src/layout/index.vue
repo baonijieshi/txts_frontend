@@ -6,6 +6,7 @@
       <page-pins />
       <app-main />
     </div>
+    <CommandPalette />
   </div>
 </template>
 
@@ -13,6 +14,7 @@
 // @ts-nocheck
 import { Sidebar, Navbar, AppMain } from './components';
 import PagePins from './components/PagePins.vue';
+import CommandPalette from '@/components/CommandPalette.vue';
 </script>
 
 <style lang="scss" scoped>

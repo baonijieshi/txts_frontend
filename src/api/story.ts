@@ -43,3 +43,7 @@ export function reviewStory(id: number, data: Record<string, unknown>) {
 export function getStoryReviews(id: number) {
   return request({ url: `/story/${id}/reviews`, method: 'get' });
 }
+
+export function batchUpdateStory(ids: number[], data: Record<string, unknown>) {
+  return request({ url: '/story/batch-update', method: 'post', data: { ids, data } });
+}

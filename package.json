@@ -12,8 +12,10 @@
     "@element-plus/icons-vue": "^2.3.2",
     "@wangeditor/editor": "^5.1.23",
     "@wangeditor/editor-for-vue": "^5.1.12",
+    "@wangeditor/plugin-md": "^1.0.0",
     "axios": "^1.18.1",
     "element-plus": "^2.14.2",
+    "marked": "^18.0.6",
     "nprogress": "^0.2.0",
     "path-browserify": "^1.0.1",
     "pnpm": "^11.9.0",
@@ -23,6 +25,7 @@
     "vuex": "^4.1.0"
   },
   "devDependencies": {
+    "@types/marked": "^6.0.0",
     "@types/node": "^26.0.1",
     "@types/nprogress": "^0.2.3",
     "@types/path-browserify": "^1.0.3",

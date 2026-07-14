@@ -117,6 +117,7 @@
           @size-change="handleSizeChange"
           @add="handleAdd"
           @import="importVisible = true"
+          @aiGenerateTest="handleAiGenerateTest"
         />
       </div>
     </div>
@@ -140,6 +141,7 @@
     <SwaggerImportDialog
       v-model:visible="importVisible"
       :import-progress="importProgress"
+      :service-list="serviceList"
       @import-confirm="handleImportConfirm"
     />
 
@@ -156,6 +158,12 @@
       v-model:visible="debuggerVisible"
       :api="debuggingApi"
       :base-url="activeBaseUrl"
+    />
+
+    <AiTestDialog
+      v-model:visible="aiTestVisible"
+      :selected-apis="selectedApisForAi"
+      @saved="onAiTestSaved"
     />
 
     <!-- 服务弹窗 -->
@@ -221,9 +229,10 @@ import SwaggerImportDialog from './components/SwaggerImportDialog.vue';
 import DuplicateConfirmDialog from './components/DuplicateConfirmDialog.vue';
 import ApiDebugger from './components/ApiDebugger.vue';
 import ApiDetailDrawer from './components/ApiDetailDrawer.vue';
+import AiTestDialog from './components/AiTestDialog.vue';
 
 const {
-  apiList, total, loading, page, pageSize, searchKeyword, filterMethod, serviceId, fetchList, deleteApi,
+  apiList, total, methodCounts, loading, page, pageSize, searchKeyword, filterMethod, serviceId, fetchList, deleteApi,
 } = useApiManage();
 
 const {
@@ -233,37 +242,38 @@ const {
 // 统计卡片
 const activeCard = ref('all');
 const statCards = computed(() => {
-  const list = apiList.value;
+  const mc = methodCounts.value;
+  const allTotal = Object.values(mc).reduce((sum, v) => sum + (typeof v === 'number' ? v : 0), 0) || total.value;
   return [
     {
       key: 'all',
       label: '全部接口',
-      value: total.value,
+      value: allTotal,
       color: 'var(--el-color-primary)',
     },
     {
       key: 'GET',
       label: 'GET',
-      value: list.filter((a) => a.method === 'GET').length,
+      value: mc.GET ?? 0,
       color: 'var(--el-color-success)',
     },
     {
       key: 'POST',
       label: 'POST',
-      value: list.filter((a) => a.method === 'POST').length,
+      value: mc.POST ?? 0,
       color: 'var(--el-color-primary)',
     },
     {
       key: 'PUT',
       label: 'PUT',
-      value: list.filter((a) => a.method === 'PUT').length,
+      value: mc.PUT ?? 0,
       color: 'var(--el-color-warning)',
     },
 
     {
       key: 'DELETE',
       label: 'DELETE',
-      value: list.filter((a) => a.method === 'DELETE').length,
+      value: mc.DELETE ?? 0,
       color: 'var(--el-color-danger)',
     },
   ];
@@ -291,7 +301,10 @@ function selectService(id) {
   serviceId.value = id;
   page.value = 1;
   fetchList().then(() => {
-    if (id === null) totalAll.value = total.value;
+    if (id === null) {
+      const mc = methodCounts.value;
+      totalAll.value = Object.values(mc).reduce((s, v) => s + (typeof v === 'number' ? v : 0), 0) || total.value;
+    }
   });
 }
 
@@ -388,10 +401,13 @@ const importProgress = ref(-1);
 const duplicateVisible = ref(false);
 const duplicateData = ref({ duplicates: [], total: 0, duplicateCount: 0 });
 const pendingApis = ref(null);
+const pendingServiceId = ref(null);
 const debuggerVisible = ref(false);
 const debuggingApi = ref(null);
 const detailVisible = ref(false);
 const detailApi = ref(null);
+const aiTestVisible = ref(false);
+const selectedApisForAi = ref([]);
 
 function handleAdd() { editingId.value = null; formVisible.value = true; }
 
@@ -449,7 +465,19 @@ function handleSizeChange(val) { pageSize.value = val; page.value = 1; fetchList
 async function onApiSaved() {
   await fetchList();
   await loadServices();
-  if (selectedServiceId.value === null) totalAll.value = total.value;
+  if (selectedServiceId.value === null) {
+    const mc = methodCounts.value;
+    totalAll.value = Object.values(mc).reduce((s, v) => s + (typeof v === 'number' ? v : 0), 0) || total.value;
+  }
+}
+
+function handleAiGenerateTest(rows) {
+  selectedApisForAi.value = rows;
+  aiTestVisible.value = true;
+}
+
+function onAiTestSaved() {
+  ElMessage.success('测试用例已保存到自动化测试场景');
 }
 
 // 导入
@@ -468,22 +496,25 @@ function finishProgress(cb) {
   setTimeout(() => { importProgress.value = -1; if (cb) cb(); }, 600);
 }
 
-async function handleImportConfirm(apis) {
+async function handleImportConfirm({ apis, serviceId }) {
   pendingApis.value = apis;
-  await doImport(apis, null);
+  pendingServiceId.value = serviceId || null;
+  await doImport(apis, null, serviceId);
 }
 
-async function doImport(apis, conflictStrategy) {
+async function doImport(apis, conflictStrategy, serviceId = null) {
   const stopProgress = startProgress();
   try {
     const payload = { apis };
     if (conflictStrategy) payload.conflict_strategy = conflictStrategy;
+    if (serviceId) payload.service_id = serviceId;
     const res = await importApis(payload);
     stopProgress();
     const { created = 0, overwritten = 0, skipped = 0 } = res.data || {};
     finishProgress(() => {
       importVisible.value = false;
       pendingApis.value = null;
+      pendingServiceId.value = null;
       ElMessage.success(`导入完成：新增 ${created} 个，覆盖 ${overwritten} 个，跳过 ${skipped} 个`);
       onApiSaved();
     });
@@ -506,13 +537,14 @@ async function doImport(apis, conflictStrategy) {
 async function handleDuplicateConfirm(strategy) {
   if (!pendingApis.value) return;
   duplicateVisible.value = false;
-  await doImport(pendingApis.value, strategy);
+  await doImport(pendingApis.value, strategy, pendingServiceId.value);
 }
 
 onMounted(async () => {
   await loadServices();
   await fetchList();
-  totalAll.value = total.value;
+  const mc = methodCounts.value;
+  totalAll.value = Object.values(mc).reduce((s, v) => s + (typeof v === 'number' ? v : 0), 0) || total.value;
   await loadEnvs();
 });
 </script>
